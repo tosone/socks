@@ -1,0 +1,386 @@
+use std::collections::{HashMap, VecDeque};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
+use shadowsocks_service::net::FlowStat;
+use tauri::{AppHandle, Emitter};
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+
+use crate::error::{AppError, AppResult};
+use crate::helper::{self, HelperStatus};
+use crate::macos_route::{self, AppliedRoutes};
+use crate::profile::{self, Profile, ProfileInput};
+use crate::sslocal;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeStatus {
+    pub active_profile_id: Option<String>,
+    pub tun_name: Option<String>,
+    pub helper_installed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficEvent {
+    pub profile_id: String,
+    pub tx: u64,
+    pub rx: u64,
+    pub up_bps: u64,
+    pub down_bps: u64,
+    pub total_tx: u64,
+    pub total_rx: u64,
+    pub samples: Vec<TrafficSample>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficSample {
+    pub up: u64,
+    pub down: u64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficTotals {
+    pub tx: u64,
+    pub rx: u64,
+}
+
+struct StoredTrafficSample {
+    captured_at: Instant,
+    sample: TrafficSample,
+}
+
+struct RuntimeSession {
+    profile_id: String,
+    tun_name: String,
+    routes: Option<AppliedRoutes>,
+    server_task: JoinHandle<()>,
+    poller_task: JoinHandle<()>,
+}
+
+pub struct AppState {
+    data_dir: PathBuf,
+    app: AppHandle,
+    profiles: Arc<Mutex<Vec<Profile>>>,
+    traffic_totals: Arc<Mutex<HashMap<String, TrafficTotals>>>,
+    session: Mutex<Option<RuntimeSession>>,
+}
+
+impl AppState {
+    pub fn load(data_dir: PathBuf, app: AppHandle) -> AppResult<Self> {
+        let profiles = profile::load_profiles(&data_dir)?;
+        let traffic_totals = profiles
+            .iter()
+            .map(|profile| {
+                (
+                    profile.id.clone(),
+                    load_traffic_totals(&data_dir, &profile.id).unwrap_or_default(),
+                )
+            })
+            .collect();
+        Ok(Self {
+            data_dir,
+            app,
+            profiles: Arc::new(Mutex::new(profiles)),
+            traffic_totals: Arc::new(Mutex::new(traffic_totals)),
+            session: Mutex::new(None),
+        })
+    }
+
+    pub async fn list_profiles(&self) -> Vec<Profile> {
+        self.profiles.lock().await.clone()
+    }
+
+    pub async fn list_traffic_totals(&self) -> HashMap<String, TrafficTotals> {
+        let profiles = self.profiles.lock().await;
+        let totals = self.traffic_totals.lock().await;
+        profiles
+            .iter()
+            .map(|profile| {
+                (
+                    profile.id.clone(),
+                    totals.get(&profile.id).cloned().unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+
+    pub async fn create_profile(&self, input: ProfileInput) -> AppResult<Profile> {
+        let created = profile::create_profile(input)?;
+        let mut profiles = self.profiles.lock().await;
+        profiles.push(created.clone());
+        profile::save_profiles(&self.data_dir, &profiles)?;
+        self.traffic_totals
+            .lock()
+            .await
+            .insert(created.id.clone(), TrafficTotals::default());
+        save_traffic_totals(&self.data_dir, &created.id, &TrafficTotals::default())?;
+        Ok(created)
+    }
+
+    pub async fn update_profile(&self, id: &str, input: ProfileInput) -> AppResult<Profile> {
+        let mut profiles = self.profiles.lock().await;
+        let profile = profiles
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or_else(|| AppError::msg("Profile not found"))?;
+        profile::apply_update(profile, input)?;
+        let updated = profile.clone();
+        profile::save_profiles(&self.data_dir, &profiles)?;
+        drop(profiles);
+        if self.active_id().await.as_deref() == Some(id) {
+            self.connect(id).await?;
+        }
+        Ok(updated)
+    }
+
+    pub async fn delete_profile(&self, id: &str) -> AppResult<()> {
+        if self.active_id().await.as_deref() == Some(id) {
+            self.disconnect().await?;
+        }
+        let mut profiles = self.profiles.lock().await;
+        let before = profiles.len();
+        profiles.retain(|p| p.id != id);
+        if profiles.len() == before {
+            return Err(AppError::msg("Profile not found"));
+        }
+        profile::save_profiles(&self.data_dir, &profiles)?;
+        self.traffic_totals.lock().await.remove(id);
+        remove_traffic_totals(&self.data_dir, id)?;
+        Ok(())
+    }
+
+    pub async fn runtime_status(&self) -> RuntimeStatus {
+        let session = self.session.lock().await;
+        RuntimeStatus {
+            active_profile_id: session.as_ref().map(|s| s.profile_id.clone()),
+            tun_name: session.as_ref().map(|s| s.tun_name.clone()),
+            helper_installed: helper::helper_status().installed,
+        }
+    }
+
+    pub fn helper_status(&self) -> HelperStatus {
+        helper::helper_status()
+    }
+
+    pub fn install_helper(&self) -> AppResult<HelperStatus> {
+        helper::install_helper()
+    }
+
+    pub fn uninstall_helper(&self) -> AppResult<HelperStatus> {
+        helper::uninstall_helper()
+    }
+
+    pub async fn connect(&self, id: &str) -> AppResult<RuntimeStatus> {
+        if !helper::helper_status().installed {
+            return Err(AppError::msg(
+                "Install the helper first. After that, connecting will not ask for an administrator password.",
+            ));
+        }
+        self.disconnect().await?;
+
+        let profile = {
+            let profiles = self.profiles.lock().await;
+            profiles
+                .iter()
+                .find(|p| p.id == id)
+                .cloned()
+                .ok_or_else(|| AppError::msg("Profile not found"))?
+        };
+
+        let snapshot = macos_route::current_default_route()?;
+        let server_ip = sslocal::resolve_server_ip(&profile.server, profile.port).await?;
+        let config = sslocal::build_server_config(&profile, Some(snapshot.interface.clone()))?;
+        let runtime = sslocal::start_local(config).await?;
+        let flow_stat = runtime.flow_stat.clone();
+
+        let server_task = tokio::spawn(async move {
+            if let Err(err) = runtime.server.run().await {
+                eprintln!("sslocal stopped: {err}");
+            }
+        });
+
+        let tun_name = match macos_route::wait_for_tun_name(Duration::from_secs(8)).await {
+            Ok(name) => name,
+            Err(err) => {
+                server_task.abort();
+                return Err(err);
+            }
+        };
+
+        let routes = match macos_route::apply_global_routes(&snapshot, &tun_name, &server_ip) {
+            Ok(routes) => routes,
+            Err(err) => {
+                server_task.abort();
+                return Err(err);
+            }
+        };
+
+        let poller_task = spawn_traffic_poller(
+            self.app.clone(),
+            profile.id.clone(),
+            flow_stat,
+            self.data_dir.clone(),
+            self.traffic_totals.clone(),
+        );
+
+        let mut session = self.session.lock().await;
+        *session = Some(RuntimeSession {
+            profile_id: profile.id,
+            tun_name,
+            routes: Some(routes),
+            server_task,
+            poller_task,
+        });
+        drop(session);
+        Ok(self.runtime_status().await)
+    }
+
+    pub async fn disconnect(&self) -> AppResult<RuntimeStatus> {
+        let mut session = self.session.lock().await;
+        if let Some(current) = session.take() {
+            current.poller_task.abort();
+            current.server_task.abort();
+            if let Some(routes) = current.routes {
+                macos_route::restore_routes(&routes)?;
+            }
+            if let Some(total) = self
+                .traffic_totals
+                .lock()
+                .await
+                .get(&current.profile_id)
+                .cloned()
+            {
+                save_traffic_totals(&self.data_dir, &current.profile_id, &total)?;
+            }
+        }
+        drop(session);
+        Ok(self.runtime_status().await)
+    }
+
+    pub async fn shutdown(&self) {
+        let _ = self.disconnect().await;
+    }
+
+    async fn active_id(&self) -> Option<String> {
+        self.session
+            .lock()
+            .await
+            .as_ref()
+            .map(|s| s.profile_id.clone())
+    }
+}
+
+fn spawn_traffic_poller(
+    app: AppHandle,
+    profile_id: String,
+    flow_stat: Arc<FlowStat>,
+    data_dir: PathBuf,
+    traffic_totals: Arc<Mutex<HashMap<String, TrafficTotals>>>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut last_tx = flow_stat.tx();
+        let mut last_rx = flow_stat.rx();
+        let (mut total_tx, mut total_rx) = {
+            let total = traffic_totals
+                .lock()
+                .await
+                .get(&profile_id)
+                .cloned()
+                .unwrap_or_else(|| load_traffic_totals(&data_dir, &profile_id).unwrap_or_default());
+            (total.tx, total.rx)
+        };
+        let mut samples = VecDeque::<StoredTrafficSample>::new();
+        let mut last_save = Instant::now();
+        let mut ticker = tokio::time::interval(Duration::from_millis(500));
+        loop {
+            ticker.tick().await;
+            let tx = flow_stat.tx();
+            let rx = flow_stat.rx();
+            let tx_delta = tx.saturating_sub(last_tx);
+            let rx_delta = rx.saturating_sub(last_rx);
+            let now = Instant::now();
+            let sample = TrafficSample {
+                up: tx_delta.saturating_mul(2),
+                down: rx_delta.saturating_mul(2),
+            };
+            total_tx = total_tx.saturating_add(tx_delta);
+            total_rx = total_rx.saturating_add(rx_delta);
+            let total = TrafficTotals {
+                tx: total_tx,
+                rx: total_rx,
+            };
+            traffic_totals
+                .lock()
+                .await
+                .insert(profile_id.clone(), total.clone());
+            if now.duration_since(last_save) >= Duration::from_secs(10) {
+                let _ = save_traffic_totals(&data_dir, &profile_id, &total);
+                last_save = now;
+            }
+            samples.push_back(StoredTrafficSample {
+                captured_at: now,
+                sample,
+            });
+            while samples.front().is_some_and(|sample| {
+                now.duration_since(sample.captured_at) > Duration::from_secs(30 * 60)
+            }) {
+                samples.pop_front();
+            }
+            let event = TrafficEvent {
+                profile_id: profile_id.clone(),
+                tx,
+                rx,
+                up_bps: samples.back().map_or(0, |sample| sample.sample.up),
+                down_bps: samples.back().map_or(0, |sample| sample.sample.down),
+                total_tx,
+                total_rx,
+                samples: samples.iter().map(|sample| sample.sample.clone()).collect(),
+            };
+            last_tx = tx;
+            last_rx = rx;
+            let _ = app.emit("traffic", event);
+        }
+    })
+}
+
+fn traffic_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("traffic")
+}
+
+fn traffic_path(data_dir: &Path, profile_id: &str) -> PathBuf {
+    traffic_dir(data_dir).join(format!("{profile_id}.json"))
+}
+
+fn load_traffic_totals(data_dir: &Path, profile_id: &str) -> AppResult<TrafficTotals> {
+    let path = traffic_path(data_dir, profile_id);
+    if !path.exists() {
+        return Ok(TrafficTotals::default());
+    }
+    let raw = fs::read_to_string(path)?;
+    if raw.trim().is_empty() {
+        return Ok(TrafficTotals::default());
+    }
+    Ok(serde_json::from_str(&raw)?)
+}
+
+fn save_traffic_totals(data_dir: &Path, profile_id: &str, totals: &TrafficTotals) -> AppResult<()> {
+    fs::create_dir_all(traffic_dir(data_dir))?;
+    let raw = serde_json::to_string_pretty(totals)?;
+    fs::write(traffic_path(data_dir, profile_id), raw)?;
+    Ok(())
+}
+
+fn remove_traffic_totals(data_dir: &Path, profile_id: &str) -> AppResult<()> {
+    let path = traffic_path(data_dir, profile_id);
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
