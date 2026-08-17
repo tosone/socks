@@ -9,6 +9,8 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 
+pub const MAX_PROFILE_NAME_CHARS: usize = 10;
+
 pub const CIPHERS: &[&str] = &[
     "aes-128-gcm",
     "aes-256-gcm",
@@ -90,6 +92,12 @@ impl ProfileInput {
     pub fn validate(&self) -> AppResult<()> {
         if self.name.trim().is_empty() {
             return Err(AppError::msg("Name is required"));
+        }
+        if self.name.trim().chars().count() > MAX_PROFILE_NAME_CHARS {
+            return Err(AppError::msg(format!(
+                "Name must be {} characters or fewer",
+                MAX_PROFILE_NAME_CHARS
+            )));
         }
         if self.server.trim().is_empty() {
             return Err(AppError::msg("Server is required"));

@@ -3,6 +3,8 @@ import type { ReactNode, SubmitEvent } from "react";
 import { Check, ChevronDown, Eye, EyeOff } from "lucide-react";
 import type { Profile, ProfileInput } from "../types";
 
+const MAX_PROFILE_NAME_CHARS = 10;
+
 type ProfileFormProps = {
   title: string;
   ciphers: string[];
@@ -45,6 +47,8 @@ export function ProfileForm({
     const parsedPort = Number(port);
     if (!name.trim()) {
       nextErrors.name = "Name is required";
+    } else if (Array.from(name.trim()).length > MAX_PROFILE_NAME_CHARS) {
+      nextErrors.name = `Name must be ${MAX_PROFILE_NAME_CHARS} characters or fewer`;
     }
     if (!server.trim()) {
       nextErrors.server = "Server is required";
@@ -82,7 +86,12 @@ export function ProfileForm({
         <h2 className="text-lg font-semibold text-zinc-900">{title}</h2>
         <div className="mt-4 grid gap-4">
           <Field label="Name" error={errors.name}>
-            <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} />
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={MAX_PROFILE_NAME_CHARS}
+              className={inputClass}
+            />
           </Field>
           <div className="grid grid-cols-3 gap-3">
             <Field label="Server" className="col-span-2" error={errors.server}>

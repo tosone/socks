@@ -1,5 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { HelperStatus, Profile, ProfileInput, RuntimeStatus, TrafficTotals } from "./types";
+import type {
+  HelperStatus,
+  Profile,
+  ProfileInput,
+  RuntimeStatus,
+  SshRunInput,
+  SshRunResult,
+  TrafficTotals,
+} from "./types";
 
 export function listProfiles() {
   return invoke<Profile[]>("list_profiles");
@@ -47,4 +55,8 @@ export function installHelper() {
 
 export function uninstallHelper() {
   return invoke<HelperStatus>("uninstall_helper");
+}
+
+export function runSshSample(input: SshRunInput) {
+  return invoke<SshRunResult>("run_ssh_sample", { input });
 }

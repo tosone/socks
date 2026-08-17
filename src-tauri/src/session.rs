@@ -39,6 +39,22 @@ pub struct TrafficEvent {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ConnectivityEvent {
+    pub profile_id: String,
+    pub status: ConnectivityStatus,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConnectivityStatus {
+    Checking,
+    Connected,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TrafficSample {
     pub up: u64,
     pub down: u64,
@@ -62,6 +78,7 @@ struct RuntimeSession {
     routes: Option<AppliedRoutes>,
     server_task: JoinHandle<()>,
     poller_task: JoinHandle<()>,
+    connectivity_task: JoinHandle<()>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -257,6 +274,7 @@ impl AppState {
             self.data_dir.clone(),
             self.traffic_totals.clone(),
         );
+        let connectivity_task = spawn_connectivity_check(self.app.clone(), profile.id.clone());
 
         let mut session = self.session.lock().await;
         *session = Some(RuntimeSession {
@@ -265,6 +283,7 @@ impl AppState {
             routes: Some(routes),
             server_task,
             poller_task,
+            connectivity_task,
         });
         drop(session);
         Ok(self.runtime_status().await)
@@ -274,6 +293,7 @@ impl AppState {
         let mut session = self.session.lock().await;
         if let Some(current) = session.take() {
             current.poller_task.abort();
+            current.connectivity_task.abort();
             current.server_task.abort();
             if let Some(routes) = current.routes {
                 macos_route::restore_routes(&routes)?;
@@ -377,6 +397,54 @@ fn spawn_traffic_poller(
             let _ = app.emit("traffic", event);
         }
     })
+}
+
+fn spawn_connectivity_check(app: AppHandle, profile_id: String) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let _ = app.emit(
+            "connectivity",
+            ConnectivityEvent {
+                profile_id: profile_id.clone(),
+                status: ConnectivityStatus::Checking,
+                message: None,
+            },
+        );
+
+        let result = check_dns_google().await;
+        let (status, message) = match result {
+            Ok(()) => (ConnectivityStatus::Connected, None),
+            Err(err) => (ConnectivityStatus::Failed, Some(err.to_string())),
+        };
+        let _ = app.emit(
+            "connectivity",
+            ConnectivityEvent {
+                profile_id,
+                status,
+                message,
+            },
+        );
+    })
+}
+
+async fn check_dns_google() -> AppResult<()> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::limited(3))
+        .build()
+        .map_err(|err| AppError::msg(format!("Failed to create HTTP client: {err}")))?;
+    let response = client
+        .get("https://dns.google")
+        .send()
+        .await
+        .map_err(|err| AppError::msg(format!("Failed to reach https://dns.google: {err}")))?;
+    if !response.status().is_success() {
+        return Err(AppError::msg(format!(
+            "https://dns.google returned HTTP {}",
+            response.status()
+        )));
+    }
+    Ok(())
 }
 
 fn traffic_dir(data_dir: &Path) -> PathBuf {

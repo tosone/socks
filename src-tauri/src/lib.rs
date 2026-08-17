@@ -3,6 +3,7 @@ mod helper;
 mod macos_route;
 mod profile;
 mod session;
+mod ssh;
 mod sslocal;
 
 use std::{collections::HashMap, fs};
@@ -11,6 +12,7 @@ use error::AppResult;
 use helper::HelperStatus;
 use profile::{Profile, ProfileInput, CIPHERS};
 use session::{AppState, RuntimeStatus, TrafficTotals};
+use ssh::{SshRunInput, SshRunResult};
 use tauri::{Manager, RunEvent};
 
 #[tauri::command]
@@ -82,6 +84,11 @@ async fn uninstall_helper(state: tauri::State<'_, AppState>) -> AppResult<Helper
     state.uninstall_helper().await
 }
 
+#[tauri::command]
+async fn run_ssh_sample(app: tauri::AppHandle, input: SshRunInput) -> AppResult<SshRunResult> {
+    ssh::run_sample(app, input).await
+}
+
 pub fn run_helper() {
     helper::run_helper();
 }
@@ -109,7 +116,8 @@ pub fn run() {
             runtime_status,
             helper_status,
             install_helper,
-            uninstall_helper
+            uninstall_helper,
+            run_ssh_sample
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

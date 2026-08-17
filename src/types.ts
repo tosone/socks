@@ -46,6 +46,34 @@ export type TrafficEvent = {
   samples: SpeedSample[];
 };
 
+export type ConnectivityStatus = "checking" | "connected" | "failed";
+
+export type ConnectivityEvent = {
+  profileId: string;
+  status: ConnectivityStatus;
+  message?: string | null;
+};
+
+export type SshAuthMode = "key" | "password";
+
+export type SshRunInput = {
+  host: string;
+  port: number;
+  username: string;
+  authMode: SshAuthMode;
+  privateKeyPath?: string | null;
+  password?: string | null;
+};
+
+export type SshRunEvent = {
+  stream: "stdout" | "stderr" | "system";
+  data: string;
+};
+
+export type SshRunResult = {
+  exitStatus: number | null;
+};
+
 export type SpeedSample = {
   up: number;
   down: number;

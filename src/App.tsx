@@ -18,7 +18,15 @@ import { ConfirmDialog } from "./components/ConfirmDialog";
 import { ErrorDialog } from "./components/ErrorDialog";
 import { ProfileCard } from "./components/ProfileCard";
 import { ProfileForm } from "./components/ProfileForm";
-import type { Profile, ProfileInput, SpeedSample, TrafficEvent } from "./types";
+import { SshRunner } from "./components/SshRunner";
+import type {
+  ConnectivityEvent,
+  ConnectivityStatus,
+  Profile,
+  ProfileInput,
+  SpeedSample,
+  TrafficEvent,
+} from "./types";
 
 const TRAFFIC_SAMPLE_INTERVAL_MS = 10_000;
 const MOCK_SAMPLE_LIMIT = (30 * 60 * 1000) / TRAFFIC_SAMPLE_INTERVAL_MS;
@@ -106,6 +114,8 @@ const INITIAL_SAMPLE_SPEED_SAMPLES: SpeedSample[] = [
   { up: INITIAL_SAMPLE_SPEED.up, down: INITIAL_SAMPLE_SPEED.down },
 ];
 
+type Page = "profiles" | "ssh";
+
 function nextSampleSpeed(current: { up: number; down: number }) {
   const up = Math.round(clamp(current.up * randomBetween(0.65, 1.45), 12_000, 76_000));
   const down = Math.round(clamp(current.down * randomBetween(0.7, 1.35), 80_000, 360_000));
@@ -144,13 +154,21 @@ function isMockProfile(profile: Profile) {
   return profile.id.startsWith(MOCK_PROFILE_ID_PREFIX);
 }
 
+function mockConnectivityResult(profileId: string): ConnectivityStatus {
+  return profileId === "mock-seattle" ? "failed" : "connected";
+}
+
 export default function App() {
+  const [page, setPage] = useState<Page>("profiles");
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [mockProfiles, setMockProfiles] = useState<Profile[]>(MOCK_PROFILES);
   const [mockActiveId, setMockActiveId] = useState<string | null>(MOCK_PROFILES[0]?.id ?? null);
   const [mockSpeeds, setMockSpeeds] = useState<Record<string, { up: number; down: number }>>(initialMockSpeeds);
   const [mockSamples, setMockSamples] = useState<Record<string, SpeedSample[]>>(initialMockSamples);
   const [mockTotals, setMockTotals] = useState<Record<string, { up: number; down: number }>>(initialMockTotals);
+  const [mockConnectivity, setMockConnectivity] = useState<Record<string, ConnectivityStatus>>(
+    MOCK_PROFILES[0] ? { [MOCK_PROFILES[0].id]: "connected" } : {},
+  );
   const [ciphers, setCiphers] = useState<string[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -166,6 +184,7 @@ export default function App() {
   const [speeds, setSpeeds] = useState<Record<string, { up: number; down: number }>>({});
   const [samples, setSamples] = useState<Record<string, SpeedSample[]>>({});
   const [totals, setTotals] = useState<Record<string, { up: number; down: number }>>({});
+  const [connectivity, setConnectivity] = useState<Record<string, ConnectivityStatus>>({});
 
   async function refresh() {
     const [nextProfiles, status, nextCiphers, nextTotals] = await Promise.all([
@@ -190,6 +209,24 @@ export default function App() {
 
   useEffect(() => {
     refresh().catch((err) => setErrorDialog(String(err)));
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<ConnectivityEvent>("connectivity", (event) => {
+      const payload = event.payload;
+      setConnectivity((current) => ({
+        ...current,
+        [payload.profileId]: payload.status,
+      }));
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((err) => setErrorDialog(String(err)));
+    return () => {
+      unlisten?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -320,7 +357,13 @@ export default function App() {
         setHelperInstalled(status.helperInstalled);
         setSpeeds((current) => ({ ...current, [profile.id]: { up: 0, down: 0 } }));
         setSamples((current) => ({ ...current, [profile.id]: [] }));
+        setConnectivity((current) => {
+          const next = { ...current };
+          delete next[profile.id];
+          return next;
+        });
       } else {
+        setConnectivity({ [profile.id]: "checking" });
         const status = await connect(profile.id);
         setActiveId(status.activeProfileId);
         setHelperInstalled(status.helperInstalled);
@@ -328,6 +371,7 @@ export default function App() {
         setSamples({ [profile.id]: [] });
       }
     } catch (err) {
+      setConnectivity({ [profile.id]: "failed" });
       setErrorDialog(String(err));
       const status = await runtimeStatus().catch(() => null);
       if (status) {
@@ -349,6 +393,11 @@ export default function App() {
       if (isMockProfile(deleting)) {
         setMockProfiles((current) => current.filter((profile) => profile.id !== deleting.id));
         setMockActiveId((current) => (current === deleting.id ? null : current));
+        setMockConnectivity((current) => {
+          const next = { ...current };
+          delete next[deleting.id];
+          return next;
+        });
         setMockTotals((current) => {
           const next = { ...current };
           delete next[deleting.id];
@@ -397,154 +446,219 @@ export default function App() {
     }
   }
 
+  function togglePage() {
+    setPage((current) => (current === "profiles" ? "ssh" : "profiles"));
+  }
+
+  useEffect(() => {
+    window.scrollTo({ top: 0 });
+  }, [page]);
+
   return (
     <div className="min-h-screen bg-zinc-50 text-zinc-900">
       <header className="fixed inset-x-0 top-0 z-20 border-b border-zinc-200 bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-3xl items-center justify-between px-6 py-3">
+        <div
+          className="mx-auto flex max-w-3xl items-center justify-between px-4 py-3"
+          onDoubleClick={togglePage}
+          title="Double-click to switch page"
+        >
           <div className="min-w-0">
-            <p className="text-sm font-medium text-zinc-600">Shadowsocks client</p>
+            <p className="select-none text-sm font-medium text-zinc-600">
+              {page === "profiles" ? "Shadowsocks client" : "Installer"}
+            </p>
           </div>
-          <button
-            type="button"
-            className="inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg bg-zinc-900 text-white hover:bg-zinc-800"
-            onClick={openCreateForm}
-            aria-label="Add profile"
-          >
-            <Plus size={18} />
-          </button>
+          {page === "profiles" ? (
+            <button
+              type="button"
+              className="inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg bg-zinc-900 text-white hover:bg-zinc-800"
+              onClick={openCreateForm}
+              onDoubleClick={(event) => event.stopPropagation()}
+              aria-label="Add profile"
+            >
+              <Plus size={18} />
+            </button>
+          ) : (
+            <div className="h-9 w-9" aria-hidden="true" />
+          )}
         </div>
       </header>
 
-      <main className="mx-auto flex max-w-3xl flex-col gap-4 px-6 pb-6 pt-20">
-        <div
-          className={`rounded-xl border px-4 py-3 text-sm ${helperInstalled
-            ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-            : "border-amber-200 bg-amber-50 text-amber-900"
+      <div
+        className={`relative [perspective:1600px] ${page === "ssh" ? "h-screen overflow-hidden" : "min-h-screen"}`}
+      >
+        <main
+          className={`${page === "profiles" ? "relative" : "absolute h-screen overflow-hidden"} inset-x-0 top-0 mx-auto flex max-w-3xl flex-col gap-4 px-4 pb-4 pt-[77px] transition duration-700 [backface-visibility:hidden] [transform-style:preserve-3d] ${page === "profiles"
+            ? "pointer-events-auto opacity-100 [transform:rotateY(0deg)]"
+            : "pointer-events-none opacity-0 [transform:rotateY(180deg)]"
             }`}
         >
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="font-medium">
-                {helperInstalled ? "Helper installed" : "Helper required"}
-              </p>
-              <p className="mt-1 text-xs opacity-80">
-                {helperInstalled
-                  ? "Routes are changed by a background helper. Connecting no longer asks for a password."
-                  : "Install once (administrator password). Later connects will not prompt again."}
-              </p>
+          <div
+            className={`rounded-xl border px-4 py-3 text-sm ${helperInstalled
+              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+              : "border-amber-200 bg-amber-50 text-amber-900"
+              }`}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="font-medium">
+                  {helperInstalled ? "Helper installed" : "Helper required"}
+                </p>
+                <p className="mt-1 text-xs opacity-80">
+                  {helperInstalled
+                    ? "Routes are changed by a background helper. Connecting no longer asks for a password."
+                    : "Install once (administrator password). Later connects will not prompt again."}
+                </p>
+              </div>
+              {helperInstalled ? (
+                <button
+                  type="button"
+                  className="rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs text-emerald-800 hover:bg-emerald-100 disabled:opacity-60"
+                  onClick={handleUninstallHelper}
+                  disabled={helperBusy}
+                >
+                  {helperBusy ? "Working…" : "Uninstall"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="rounded-lg bg-zinc-900 px-3 py-1.5 text-xs text-white hover:bg-zinc-800 disabled:opacity-60"
+                  onClick={handleInstallHelper}
+                  disabled={helperBusy}
+                >
+                  {helperBusy ? "Installing…" : "Install helper"}
+                </button>
+              )}
             </div>
-            {helperInstalled ? (
-              <button
-                type="button"
-                className="rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs text-emerald-800 hover:bg-emerald-100 disabled:opacity-60"
-                onClick={handleUninstallHelper}
-                disabled={helperBusy}
-              >
-                {helperBusy ? "Working…" : "Uninstall"}
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="rounded-lg bg-zinc-900 px-3 py-1.5 text-xs text-white hover:bg-zinc-800 disabled:opacity-60"
-                onClick={handleInstallHelper}
-                disabled={helperBusy}
-              >
-                {helperBusy ? "Installing…" : "Install helper"}
-              </button>
-            )}
           </div>
-        </div>
 
-        {errorDialog ? (
-          <ErrorDialog
-            message={errorDialog}
-            onClose={() => setErrorDialog(null)}
-          />
-        ) : null}
+          {errorDialog ? (
+            <ErrorDialog
+              message={errorDialog}
+              onClose={() => setErrorDialog(null)}
+            />
+          ) : null}
 
-        {sortedProfiles.length === 0 ? (
-          <>
-            <button
-              type="button"
-              className="cursor-pointer rounded-2xl border border-dashed border-zinc-300 bg-white px-6 py-16 text-center text-sm text-zinc-500 transition hover:border-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 focus:outline-none focus:ring-2 focus:ring-zinc-300 focus:ring-offset-2"
-              onClick={openCreateForm}
-            >
-              No profiles yet. Click + to add a Shadowsocks server.
-            </button>
-            {SHOW_MOCK_PROFILES
-              ? mockProfiles.map((profile) => {
-                const connected = mockActiveId === profile.id;
-                const speed = mockSpeeds[profile.id] ?? { up: 0, down: 0 };
-                const total = mockTotals[profile.id] ?? { up: 0, down: 0 };
-                return (
-                  <ProfileCard
-                    key={profile.id}
-                    profile={profile}
-                    connected={connected}
-                    connecting={false}
-                    upBps={connected ? speed.up : 0}
-                    downBps={connected ? speed.down : 0}
-                    totalUpBytes={total.up}
-                    totalDownBytes={total.down}
-                    samples={mockSamples[profile.id] ?? []}
-                    onToggle={() => {
-                      setMockActiveId((current) => {
-                        if (current === profile.id) {
-                          setMockSpeeds((speeds) => ({ ...speeds, [profile.id]: { up: 0, down: 0 } }));
-                          setMockSamples((samples) => ({ ...samples, [profile.id]: [] }));
-                          return null;
-                        }
-                        setMockSpeeds((speeds) => ({
-                          ...speeds,
-                          ...(current ? { [current]: { up: 0, down: 0 } } : {}),
-                        }));
-                        setMockSamples((samples) => ({
-                          ...samples,
-                          ...(current ? { [current]: [] } : {}),
-                          [profile.id]: [],
-                        }));
-                        return profile.id;
-                      });
-                    }}
-                    onEdit={() => {
-                      setEditing(profile);
-                      setFormError(null);
-                      setFormOpen(true);
-                    }}
-                    onDelete={() => setDeleting(profile)}
-                  />
-                );
-              })
-              : null}
-          </>
-        ) : (
-          sortedProfiles.map((profile) => {
-            const connected = activeId === profile.id;
-            const speed = speeds[profile.id] ?? { up: 0, down: 0 };
-            const total = totals[profile.id] ?? { up: 0, down: 0 };
-            return (
-              <ProfileCard
-                key={profile.id}
-                profile={profile}
-                connected={connected}
-                connecting={busyId === profile.id}
-                upBps={connected ? speed.up : 0}
-                downBps={connected ? speed.down : 0}
-                totalUpBytes={total.up}
-                totalDownBytes={total.down}
-                samples={samples[profile.id] ?? []}
-                onToggle={() => handleToggle(profile)}
-                onEdit={() => {
-                  setEditing(profile);
-                  setFormError(null);
-                  setFormOpen(true);
-                }}
-                onDelete={() => setDeleting(profile)}
-              />
-            );
-          })
-        )}
-      </main>
+          {sortedProfiles.length === 0 ? (
+            <>
+              <button
+                type="button"
+                className="cursor-pointer rounded-2xl border border-dashed border-zinc-300 bg-white px-6 py-16 text-center text-sm text-zinc-500 transition hover:border-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 focus:outline-none focus:ring-2 focus:ring-zinc-300 focus:ring-offset-2"
+                onClick={openCreateForm}
+              >
+                No profiles yet. Click + to add a Shadowsocks server.
+              </button>
+              {SHOW_MOCK_PROFILES
+                ? mockProfiles.map((profile, index) => {
+                  const connected = mockActiveId === profile.id;
+                  const speed = mockSpeeds[profile.id] ?? { up: 0, down: 0 };
+                  const total = mockTotals[profile.id] ?? { up: 0, down: 0 };
+                  const mockStatus = mockConnectivity[profile.id];
+                  return (
+                    <ProfileCard
+                      key={profile.id}
+                      profile={profile}
+                      connected={connected}
+                      connecting={mockStatus === "checking"}
+                      upBps={connected ? speed.up : 0}
+                      downBps={connected ? speed.down : 0}
+                      totalUpBytes={total.up}
+                      totalDownBytes={total.down}
+                      samples={mockSamples[profile.id] ?? []}
+                      connectivityStatus={connected ? mockStatus ?? "checking" : undefined}
+                      menuPlacement={index === mockProfiles.length - 1 ? "up" : "down"}
+                      onToggle={() => {
+                        setMockActiveId((current) => {
+                          if (current === profile.id) {
+                            setMockSpeeds((speeds) => ({ ...speeds, [profile.id]: { up: 0, down: 0 } }));
+                            setMockSamples((samples) => ({ ...samples, [profile.id]: [] }));
+                            setMockConnectivity((statuses) => {
+                              const next = { ...statuses };
+                              delete next[profile.id];
+                              return next;
+                            });
+                            return null;
+                          }
+                          setMockSpeeds((speeds) => ({
+                            ...speeds,
+                            ...(current ? { [current]: { up: 0, down: 0 } } : {}),
+                          }));
+                          setMockSamples((samples) => ({
+                            ...samples,
+                            ...(current ? { [current]: [] } : {}),
+                            [profile.id]: [],
+                          }));
+                          setMockConnectivity({
+                            [profile.id]: "checking",
+                          });
+                          window.setTimeout(() => {
+                            setMockConnectivity((statuses) => {
+                              if (statuses[profile.id] !== "checking") {
+                                return statuses;
+                              }
+                              return {
+                                ...statuses,
+                                [profile.id]: mockConnectivityResult(profile.id),
+                              };
+                            });
+                          }, 1200);
+                          return profile.id;
+                        });
+                      }}
+                      onEdit={() => {
+                        setEditing(profile);
+                        setFormError(null);
+                        setFormOpen(true);
+                      }}
+                      onDelete={() => setDeleting(profile)}
+                    />
+                  );
+                })
+                : null}
+            </>
+          ) : (
+            sortedProfiles.map((profile, index) => {
+              const connected = activeId === profile.id;
+              const speed = speeds[profile.id] ?? { up: 0, down: 0 };
+              const total = totals[profile.id] ?? { up: 0, down: 0 };
+              return (
+                <ProfileCard
+                  key={profile.id}
+                  profile={profile}
+                  connected={connected}
+                  connecting={busyId === profile.id}
+                  upBps={connected ? speed.up : 0}
+                  downBps={connected ? speed.down : 0}
+                  totalUpBytes={total.up}
+                  totalDownBytes={total.down}
+                  samples={samples[profile.id] ?? []}
+                  connectivityStatus={
+                    connected || busyId === profile.id
+                      ? connectivity[profile.id] ?? "checking"
+                      : undefined
+                  }
+                  menuPlacement={index === sortedProfiles.length - 1 ? "up" : "down"}
+                  onToggle={() => handleToggle(profile)}
+                  onEdit={() => {
+                    setEditing(profile);
+                    setFormError(null);
+                    setFormOpen(true);
+                  }}
+                  onDelete={() => setDeleting(profile)}
+                />
+              );
+            })
+          )}
+        </main>
+
+        <main
+          className={`${page === "ssh" ? "relative" : "absolute"} inset-x-0 top-0 mx-auto flex h-screen max-w-3xl flex-col px-4 pb-4 pt-[77px] transition duration-700 [backface-visibility:hidden] [transform-style:preserve-3d] ${page === "ssh"
+            ? "pointer-events-auto opacity-100 [transform:rotateY(0deg)]"
+            : "pointer-events-none opacity-0 [transform:rotateY(-180deg)]"
+            }`}
+        >
+          <SshRunner />
+        </main>
+      </div>
 
       {formOpen ? (
         <ProfileForm

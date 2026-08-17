@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { MoreHorizontal } from "lucide-react";
-import type { Profile, SpeedSample } from "../types";
+import { CircleAlert, CircleCheck, LoaderCircle, MoreHorizontal } from "lucide-react";
+import type { ConnectivityStatus, Profile, SpeedSample } from "../types";
 import { Sparkline } from "./Sparkline";
 
 type ProfileCardProps = {
@@ -12,6 +12,8 @@ type ProfileCardProps = {
   totalUpBytes: number;
   totalDownBytes: number;
   samples: SpeedSample[];
+  connectivityStatus?: ConnectivityStatus;
+  menuPlacement?: "down" | "up";
   onToggle: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -26,6 +28,8 @@ export function ProfileCard({
   totalUpBytes,
   totalDownBytes,
   samples,
+  connectivityStatus,
+  menuPlacement = "down",
   onToggle,
   onEdit,
   onDelete,
@@ -45,7 +49,7 @@ export function ProfileCard({
   }, []);
 
   return (
-    <article className="relative flex min-h-32 rounded-2xl border border-zinc-200 bg-white px-4 py-5 shadow-sm">
+    <article className="relative flex min-h-40 rounded-2xl border border-zinc-200 bg-white px-4 py-5 shadow-sm">
       <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-2xl">
         <Sparkline
           samples={connected ? samples : []}
@@ -54,8 +58,9 @@ export function ProfileCard({
       </div>
       <div className="relative z-10 flex flex-1 flex-col justify-between gap-4">
         <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-2">
             <h2 className="truncate text-lg font-semibold text-zinc-900">{profile.name}</h2>
+            <ConnectivityIcon status={connectivityStatus} />
           </div>
           <div className="flex shrink-0 items-center gap-4">
             <button
@@ -88,7 +93,10 @@ export function ProfileCard({
                 <MoreHorizontal size={18} className="pointer-events-none" />
               </button>
               {menuOpen ? (
-                <div className="absolute right-0 z-20 mt-1 w-32 cursor-pointer overflow-hidden rounded-lg border border-zinc-200 bg-white py-1 shadow-lg">
+                <div
+                  className={`absolute right-0 z-20 w-32 cursor-pointer overflow-hidden rounded-lg border border-zinc-200 bg-white py-1 shadow-lg ${menuPlacement === "up" ? "bottom-full mb-1" : "top-full mt-1"
+                    }`}
+                >
                   <button
                     type="button"
                     className={`block w-full cursor-pointer px-3 py-1.5 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60 ${connected ? "text-amber-700 hover:bg-amber-50" : "text-emerald-700 hover:bg-emerald-50"
@@ -132,6 +140,37 @@ export function ProfileCard({
       </div>
     </article>
   );
+}
+
+function ConnectivityIcon({ status }: { status?: ConnectivityStatus }) {
+  if (status === "checking") {
+    return (
+      <LoaderCircle
+        size={16}
+        className="shrink-0 animate-spin text-zinc-500"
+        aria-label="Checking connection"
+      />
+    );
+  }
+  if (status === "connected") {
+    return (
+      <CircleCheck
+        size={16}
+        className="shrink-0 text-emerald-600"
+        aria-label="Connection verified"
+      />
+    );
+  }
+  if (status === "failed") {
+    return (
+      <CircleAlert
+        size={16}
+        className="shrink-0 text-red-600"
+        aria-label="Connection check failed"
+      />
+    );
+  }
+  return null;
 }
 
 function formatSpeed(bps: number) {

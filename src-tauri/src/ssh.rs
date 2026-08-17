@@ -1,0 +1,287 @@
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use russh::client;
+use russh::keys::{load_secret_key, PrivateKeyWithHashAlg};
+use russh::{ChannelMsg, Disconnect};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter};
+use tokio::net::ToSocketAddrs;
+
+use crate::error::{AppError, AppResult};
+
+const SAMPLE_COMMAND: &str = r#"i=1
+while [ "$i" -le 20 ]; do
+  case $((i % 6)) in
+    0) color=32; label=ok ;;
+    1) color=36; label=info ;;
+    2) color=33; label=warn ;;
+    3) color=35; label=task ;;
+    4) color=34; label=step ;;
+    *) color=31; label=check ;;
+  esac
+  printf "\033[%sm[%02d/20] mock %s log from remote command path=/srv/app/releases/2026-08-17/bin/deploy-worker target=production-ap-southeast-1 request_id=ssh-runner-demo-%02d args=\"--dry-run=false --batch-size=2048 --retry-window=20s --feature=long-line-wrapping-validation\" payload=abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789\033[0m\n" "$color" "$i" "$label" "$i"
+  sleep 1
+  i=$((i + 1))
+done
+printf "\033[32mMock command completed.\033[0m\n""#;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshRunInput {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_mode: SshAuthMode,
+    pub private_key_path: Option<String>,
+    pub password: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SshAuthMode {
+    Key,
+    Password,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshRunResult {
+    pub exit_status: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SshRunEvent {
+    stream: SshLogStream,
+    data: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum SshLogStream {
+    Stdout,
+    Stderr,
+    System,
+}
+
+struct Client;
+
+impl client::Handler for Client {
+    type Error = russh::Error;
+
+    async fn check_server_key(
+        &mut self,
+        _server_public_key: &russh::keys::ssh_key::PublicKey,
+    ) -> Result<bool, Self::Error> {
+        Ok(true)
+    }
+}
+
+struct Session {
+    session: client::Handle<Client>,
+}
+
+impl Session {
+    async fn connect<A: ToSocketAddrs>(
+        input: &SshRunInput,
+        addrs: A,
+        app: &AppHandle,
+    ) -> AppResult<Self> {
+        let username = username(input);
+        let config = Arc::new(client::Config {
+            inactivity_timeout: Some(Duration::from_secs(15)),
+            ..Default::default()
+        });
+        let mut session = client::connect(config, addrs, Client)
+            .await
+            .map_err(|err| AppError::msg(format!("Failed to connect SSH server: {err}")))?;
+
+        match input.auth_mode {
+            SshAuthMode::Key => {
+                let key_path = input
+                    .private_key_path
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|path| !path.is_empty())
+                    .ok_or_else(|| AppError::msg("Private key path is required."))?;
+                emit_log(
+                    app,
+                    SshLogStream::System,
+                    format!("Using key: {key_path}\n"),
+                );
+                let key_pair = load_secret_key(expand_home(key_path), None)
+                    .map_err(|err| AppError::msg(format!("Failed to load private key: {err}")))?;
+                let auth_res = session
+                    .authenticate_publickey(
+                        username,
+                        PrivateKeyWithHashAlg::new(
+                            Arc::new(key_pair),
+                            session
+                                .best_supported_rsa_hash()
+                                .await
+                                .map_err(|err| {
+                                    AppError::msg(format!("Failed to negotiate RSA hash: {err}"))
+                                })?
+                                .flatten(),
+                        ),
+                    )
+                    .await
+                    .map_err(|err| {
+                        AppError::msg(format!("Public key authentication failed: {err}"))
+                    })?;
+                if !auth_res.success() {
+                    return Err(AppError::msg("Public key authentication was rejected."));
+                }
+            }
+            SshAuthMode::Password => {
+                let password = input
+                    .password
+                    .as_deref()
+                    .ok_or_else(|| AppError::msg("Password is required."))?;
+                let auth_res = session
+                    .authenticate_password(username, password)
+                    .await
+                    .map_err(|err| {
+                        AppError::msg(format!("Password authentication failed: {err}"))
+                    })?;
+                if !auth_res.success() {
+                    return Err(AppError::msg("Password authentication was rejected."));
+                }
+            }
+        }
+
+        Ok(Self { session })
+    }
+
+    async fn call(&mut self, command: &str, app: &AppHandle) -> AppResult<Option<u32>> {
+        let mut channel = self
+            .session
+            .channel_open_session()
+            .await
+            .map_err(|err| AppError::msg(format!("Failed to open SSH channel: {err}")))?;
+        channel
+            .request_pty(false, "xterm-256color", 100, 30, 0, 0, &[])
+            .await
+            .map_err(|err| AppError::msg(format!("Failed to request SSH PTY: {err}")))?;
+        channel
+            .exec(true, command)
+            .await
+            .map_err(|err| AppError::msg(format!("Failed to execute SSH command: {err}")))?;
+
+        let mut exit_status = None;
+        while let Some(msg) = channel.wait().await {
+            match msg {
+                ChannelMsg::Data { data } => {
+                    emit_log(app, SshLogStream::Stdout, String::from_utf8_lossy(&data));
+                }
+                ChannelMsg::ExtendedData { data, .. } => {
+                    emit_log(app, SshLogStream::Stderr, String::from_utf8_lossy(&data));
+                }
+                ChannelMsg::ExitStatus { exit_status: code } => {
+                    exit_status = Some(code);
+                }
+                ChannelMsg::ExitSignal {
+                    signal_name,
+                    error_message,
+                    ..
+                } => {
+                    emit_log(
+                        app,
+                        SshLogStream::Stderr,
+                        format!("Process exited by signal {signal_name:?}: {error_message}\n"),
+                    );
+                }
+                ChannelMsg::Close => break,
+                _ => {}
+            }
+        }
+        Ok(exit_status)
+    }
+
+    async fn close(&mut self) {
+        let _ = self
+            .session
+            .disconnect(Disconnect::ByApplication, "", "English")
+            .await;
+    }
+}
+
+pub async fn run_sample(app: AppHandle, input: SshRunInput) -> AppResult<SshRunResult> {
+    if input.host.trim().is_empty() {
+        return run_local_sample(&app).await;
+    }
+
+    let host = input.host.trim().to_string();
+    let port = input.port;
+    emit_log(
+        &app,
+        SshLogStream::System,
+        format!(
+            "\x1b[36mConnecting\x1b[0m {host}:{port} as {}\n",
+            username(&input)
+        ),
+    );
+    let mut session = Session::connect(&input, (host.as_str(), port), &app).await?;
+    emit_log(
+        &app,
+        SshLogStream::System,
+        format!("\x1b[32mConnected\x1b[0m. Running sample command.\n$ {SAMPLE_COMMAND}\n"),
+    );
+    let exit_status = session.call(SAMPLE_COMMAND, &app).await?;
+    session.close().await;
+    Ok(SshRunResult { exit_status })
+}
+
+async fn run_local_sample(app: &AppHandle) -> AppResult<SshRunResult> {
+    let lines = [
+        "\x1b[36mNo host provided; rendering local SSH sample.\x1b[0m\n",
+        "Connecting 192.0.2.10:22 as root\n",
+        "\x1b[32mConnected\x1b[0m. Running sample command.\n",
+        "$ printf '\\033[32mconnected\\033[0m\\n'; uname -a; id; pwd\n",
+        "\x1b[32mconnected\x1b[0m\n",
+        "Darwin sample-host 25.0.0 arm64\n",
+        "uid=0(root) gid=0(root) groups=0(root)\n",
+        "/root\n",
+    ];
+
+    for line in lines {
+        emit_log(app, SshLogStream::System, line);
+        tokio::time::sleep(Duration::from_millis(180)).await;
+    }
+    Ok(SshRunResult {
+        exit_status: Some(0),
+    })
+}
+
+fn username(input: &SshRunInput) -> String {
+    let username = input.username.trim();
+    if username.is_empty() {
+        "root".to_string()
+    } else {
+        username.to_string()
+    }
+}
+
+fn emit_log(app: &AppHandle, stream: SshLogStream, data: impl Into<String>) {
+    let _ = app.emit(
+        "ssh-run",
+        SshRunEvent {
+            stream,
+            data: data.into(),
+        },
+    );
+}
+
+fn expand_home(path: &str) -> PathBuf {
+    if path == "~" {
+        return std::env::var_os("HOME").map_or_else(|| PathBuf::from(path), PathBuf::from);
+    }
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    PathBuf::from(path)
+}
