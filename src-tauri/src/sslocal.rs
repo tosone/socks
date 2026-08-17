@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use ipnet::IpNet;
@@ -24,6 +25,7 @@ pub struct LocalRuntime {
 pub fn build_server_config(
     profile: &Profile,
     outbound_bind_interface: Option<String>,
+    bundled_plugin_dir: Option<&Path>,
 ) -> AppResult<Config> {
     let method = CipherKind::from_str(&profile.method)
         .map_err(|_| AppError::msg(format!("Unknown encryption method: {}", profile.method)))?;
@@ -40,7 +42,7 @@ pub fn build_server_config(
 
     if let Some(plugin) = profile.plugin.as_ref() {
         server_cfg.set_plugin(PluginConfig {
-            plugin: plugin.clone(),
+            plugin: resolve_plugin_path(plugin, bundled_plugin_dir),
             plugin_opts: profile.plugin_opts.clone(),
             plugin_args: Vec::new(),
             plugin_mode: Mode::TcpAndUdp,
@@ -65,6 +67,20 @@ pub fn build_server_config(
     config.server.push(instance);
     config.outbound_bind_interface = outbound_bind_interface;
     Ok(config)
+}
+
+fn resolve_plugin_path(plugin: &str, bundled_plugin_dir: Option<&Path>) -> String {
+    let plugin_path = Path::new(plugin);
+    if plugin_path.is_absolute() || plugin_path.components().count() > 1 {
+        return plugin.to_string();
+    }
+
+    bundled_plugin_dir
+        .map(|dir| dir.join(plugin))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from(plugin))
+        .to_string_lossy()
+        .into_owned()
 }
 
 pub async fn start_local(config: Config) -> AppResult<LocalRuntime> {

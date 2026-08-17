@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use shadowsocks_service::net::FlowStat;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
@@ -196,7 +196,17 @@ impl AppState {
 
         let snapshot = macos_route::current_default_route()?;
         let server_ip = sslocal::resolve_server_ip(&profile.server, profile.port).await?;
-        let config = sslocal::build_server_config(&profile, Some(snapshot.interface.clone()))?;
+        let bundled_plugin_dir = self
+            .app
+            .path()
+            .resource_dir()
+            .ok()
+            .map(|path| path.join("plugins"));
+        let config = sslocal::build_server_config(
+            &profile,
+            Some(snapshot.interface.clone()),
+            bundled_plugin_dir.as_deref(),
+        )?;
         let runtime = sslocal::start_local(config).await?;
         let flow_stat = runtime.flow_stat.clone();
 
