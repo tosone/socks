@@ -8,6 +8,7 @@ use std::{env, fs};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
+use crate::sslocal::DNS_RELAY_PORT;
 
 pub const HELPER_LABEL: &str = "com.tosone.socks.helper";
 pub const HELPER_SOCKET: &str = "/var/run/com.tosone.socks.helper.sock";
@@ -24,6 +25,13 @@ pub enum HelperRequest {
         #[serde(rename = "serverIp")]
         server_ip: String,
         gateway: Option<String>,
+    },
+    Dns {
+        action: RouteAction,
+        service: String,
+        servers: Vec<String>,
+        #[serde(rename = "relayPort")]
+        relay_port: Option<u16>,
     },
 }
 
@@ -133,6 +141,24 @@ pub fn delete_routes(tun: &str, server_ip: &str) -> AppResult<()> {
     })
 }
 
+pub fn apply_dns(service: &str) -> AppResult<()> {
+    send_request(&HelperRequest::Dns {
+        action: RouteAction::Add,
+        service: service.to_string(),
+        servers: Vec::new(),
+        relay_port: Some(DNS_RELAY_PORT),
+    })
+}
+
+pub fn restore_dns(service: &str, servers: &[String]) -> AppResult<()> {
+    send_request(&HelperRequest::Dns {
+        action: RouteAction::Delete,
+        service: service.to_string(),
+        servers: servers.to_vec(),
+        relay_port: None,
+    })
+}
+
 pub fn run_helper() {
     if let Err(err) = helper_main() {
         eprintln!("socks helper: {err}");
@@ -200,6 +226,21 @@ fn handle_client(stream: &mut UnixStream) -> AppResult<()> {
                 },
             )
         }
+        HelperRequest::Dns {
+            action,
+            service,
+            servers,
+            relay_port,
+        } => {
+            apply_dns_command(action, &service, &servers, relay_port)?;
+            write_response(
+                stream,
+                &HelperResponse {
+                    ok: true,
+                    error: None,
+                },
+            )
+        }
     }
 }
 
@@ -235,6 +276,75 @@ fn apply_route_command(
     Ok(())
 }
 
+fn apply_dns_command(
+    action: RouteAction,
+    service: &str,
+    servers: &[String],
+    relay_port: Option<u16>,
+) -> AppResult<()> {
+    if service.trim().is_empty() {
+        return Err(AppError::msg("Missing network service"));
+    }
+
+    match action {
+        RouteAction::Add => {
+            let relay_port = relay_port.ok_or_else(|| AppError::msg("Missing DNS relay port"))?;
+            apply_pf_dns_redirect(relay_port)?;
+            run_networksetup(&["-setdnsservers", service, "127.0.0.1"])?;
+        }
+        RouteAction::Delete => {
+            if servers.is_empty() {
+                run_networksetup(&["-setdnsservers", service, "Empty"])?;
+            } else {
+                let mut args = vec!["-setdnsservers", service];
+                args.extend(servers.iter().map(String::as_str));
+                run_networksetup(&args)?;
+            }
+            clear_pf_dns_redirect()?;
+        }
+    }
+    Ok(())
+}
+
+fn apply_pf_dns_redirect(relay_port: u16) -> AppResult<()> {
+    if relay_port == 0 {
+        return Err(AppError::msg("Invalid DNS relay port"));
+    }
+    let rules = format!(
+        "rdr pass on lo0 inet proto tcp from any to 127.0.0.1 port 53 -> 127.0.0.1 port {relay_port}\n\
+         rdr pass on lo0 inet proto udp from any to 127.0.0.1 port 53 -> 127.0.0.1 port {relay_port}\n"
+    );
+    let _ = Command::new("/sbin/pfctl").arg("-E").output();
+    let mut child = Command::new("/sbin/pfctl")
+        .args(["-a", "com.apple/socks", "-f", "-"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|err| AppError::msg(format!("Failed to run pfctl: {err}")))?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(rules.as_bytes())?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|err| AppError::msg(format!("Failed to wait for pfctl: {err}")))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(AppError::msg(stderr_or(&output, "pfctl failed")))
+    }
+}
+
+fn clear_pf_dns_redirect() -> AppResult<()> {
+    let output = Command::new("/sbin/pfctl")
+        .args(["-a", "com.apple/socks", "-F", "all"])
+        .output()
+        .map_err(|err| AppError::msg(format!("Failed to run pfctl: {err}")))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(AppError::msg(stderr_or(&output, "pfctl failed")))
+    }
+}
+
 fn run_route(args: &[&str]) -> AppResult<()> {
     let output = Command::new("/sbin/route")
         .args(args)
@@ -248,6 +358,26 @@ fn run_route(args: &[&str]) -> AppResult<()> {
         Err(AppError::msg("route command failed"))
     } else {
         Err(AppError::msg(err))
+    }
+}
+
+fn run_networksetup(args: &[&str]) -> AppResult<()> {
+    let output = Command::new("/usr/sbin/networksetup")
+        .args(args)
+        .output()
+        .map_err(|err| AppError::msg(format!("Failed to run networksetup: {err}")))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(AppError::msg(stderr_or(&output, "networksetup failed")))
+}
+
+fn stderr_or(output: &std::process::Output, fallback: &str) -> String {
+    let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if err.is_empty() {
+        fallback.to_string()
+    } else {
+        err
     }
 }
 

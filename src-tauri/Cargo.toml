@@ -41,6 +41,7 @@ shadowsocks-service = { path = "../shadowsocks-rust/crates/shadowsocks-service",
     "aead-cipher-2022",
     "aead-cipher-2022-extra",
     "hickory-dns",
+    "local-dns",
     "local-http-rustls",
     "stream-cipher",
 ] }

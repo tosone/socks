@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -6,16 +6,20 @@ use ipnet::IpNet;
 use shadowsocks_service::config::{
     Config, ConfigType, LocalConfig, LocalInstanceConfig, ProtocolType, ServerInstanceConfig,
 };
+use shadowsocks_service::local::dns::NameServerAddr;
 use shadowsocks_service::local::Server;
 use shadowsocks_service::net::FlowStat;
 use shadowsocks_service::shadowsocks::config::{Mode, ServerAddr, ServerConfig};
 use shadowsocks_service::shadowsocks::crypto::CipherKind;
 use shadowsocks_service::shadowsocks::plugin::PluginConfig;
+use shadowsocks_service::shadowsocks::relay::socks5::Address;
 
 use crate::error::{AppError, AppResult};
 use crate::profile::Profile;
 
 pub const TUN_ADDRESS: &str = "10.255.0.1/24";
+pub const DNS_RELAY_PORT: u16 = 5353;
+pub const REMOTE_DNS_PORT: u16 = 53;
 
 pub struct LocalRuntime {
     pub server: Server,
@@ -64,6 +68,25 @@ pub fn build_server_config(
     config
         .local
         .push(LocalInstanceConfig::with_local_config(local));
+
+    let mut dns = LocalConfig::new(ProtocolType::Dns);
+    dns.addr = Some(ServerAddr::SocketAddr(SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        DNS_RELAY_PORT,
+    )));
+    dns.mode = Mode::TcpAndUdp;
+    dns.local_dns_addr = Some(NameServerAddr::SocketAddr(SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+        REMOTE_DNS_PORT,
+    )));
+    dns.remote_dns_addr = Some(Address::from(SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+        REMOTE_DNS_PORT,
+    )));
+    config
+        .local
+        .push(LocalInstanceConfig::with_local_config(dns));
+
     config.server.push(instance);
     config.outbound_bind_interface = outbound_bind_interface;
     Ok(config)
