@@ -263,9 +263,18 @@ fn apply_route_command(
             if !valid_ipv4(gateway) {
                 return Err(AppError::msg("Invalid gateway IP"));
             }
-            run_route(&["-n", "add", "-host", server_ip, gateway])?;
-            run_route(&["-n", "add", "-net", "0.0.0.0/1", "-interface", tun])?;
-            run_route(&["-n", "add", "-net", "128.0.0.0/1", "-interface", tun])?;
+            let result = (|| {
+                run_route(&["-n", "add", "-host", server_ip, gateway])?;
+                run_route(&["-n", "add", "-net", "0.0.0.0/1", "-interface", tun])?;
+                run_route(&["-n", "add", "-net", "128.0.0.0/1", "-interface", tun])?;
+                Ok(())
+            })();
+            if let Err(err) = result {
+                let _ = run_route(&["-n", "delete", "-net", "0.0.0.0/1", "-interface", tun]);
+                let _ = run_route(&["-n", "delete", "-net", "128.0.0.0/1", "-interface", tun]);
+                let _ = run_route(&["-n", "delete", "-host", server_ip]);
+                return Err(err);
+            }
         }
         RouteAction::Delete => {
             let _ = run_route(&["-n", "delete", "-net", "0.0.0.0/1", "-interface", tun]);
@@ -290,17 +299,22 @@ fn apply_dns_command(
         RouteAction::Add => {
             let relay_port = relay_port.ok_or_else(|| AppError::msg("Missing DNS relay port"))?;
             apply_pf_dns_redirect(relay_port)?;
-            run_networksetup(&["-setdnsservers", service, "127.0.0.1"])?;
+            if let Err(err) = run_networksetup(&["-setdnsservers", service, "127.0.0.1"]) {
+                let _ = clear_pf_dns_redirect();
+                return Err(err);
+            }
         }
         RouteAction::Delete => {
-            if servers.is_empty() {
-                run_networksetup(&["-setdnsservers", service, "Empty"])?;
+            let result = if servers.is_empty() {
+                run_networksetup(&["-setdnsservers", service, "Empty"])
             } else {
                 let mut args = vec!["-setdnsservers", service];
                 args.extend(servers.iter().map(String::as_str));
-                run_networksetup(&args)?;
-            }
-            clear_pf_dns_redirect()?;
+                run_networksetup(&args)
+            };
+            let clear_result = clear_pf_dns_redirect();
+            result?;
+            clear_result?;
         }
     }
     Ok(())

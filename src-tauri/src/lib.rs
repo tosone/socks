@@ -78,8 +78,8 @@ fn install_helper(state: tauri::State<'_, AppState>) -> AppResult<HelperStatus> 
 }
 
 #[tauri::command]
-fn uninstall_helper(state: tauri::State<'_, AppState>) -> AppResult<HelperStatus> {
-    state.uninstall_helper()
+async fn uninstall_helper(state: tauri::State<'_, AppState>) -> AppResult<HelperStatus> {
+    state.uninstall_helper().await
 }
 
 pub fn run_helper() {

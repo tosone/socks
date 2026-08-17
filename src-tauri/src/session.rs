@@ -64,6 +64,12 @@ struct RuntimeSession {
     poller_task: JoinHandle<()>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeState {
+    routes: AppliedRoutes,
+}
+
 pub struct AppState {
     data_dir: PathBuf,
     app: AppHandle,
@@ -84,6 +90,10 @@ impl AppState {
                 )
             })
             .collect();
+        if helper::helper_status().installed {
+            let _ = recover_runtime_state(&data_dir);
+        }
+
         Ok(Self {
             data_dir,
             app,
@@ -173,7 +183,8 @@ impl AppState {
         helper::install_helper()
     }
 
-    pub fn uninstall_helper(&self) -> AppResult<HelperStatus> {
+    pub async fn uninstall_helper(&self) -> AppResult<HelperStatus> {
+        self.disconnect().await?;
         helper::uninstall_helper()
     }
 
@@ -184,6 +195,7 @@ impl AppState {
             ));
         }
         self.disconnect().await?;
+        recover_runtime_state(&self.data_dir)?;
 
         let profile = {
             let profiles = self.profiles.lock().await;
@@ -231,6 +243,12 @@ impl AppState {
                 return Err(err);
             }
         };
+        save_runtime_state(
+            &self.data_dir,
+            &RuntimeState {
+                routes: routes.clone(),
+            },
+        )?;
 
         let poller_task = spawn_traffic_poller(
             self.app.clone(),
@@ -260,6 +278,7 @@ impl AppState {
             if let Some(routes) = current.routes {
                 macos_route::restore_routes(&routes)?;
             }
+            remove_runtime_state(&self.data_dir)?;
             if let Some(total) = self
                 .traffic_totals
                 .lock()
@@ -392,5 +411,45 @@ fn remove_traffic_totals(data_dir: &Path, profile_id: &str) -> AppResult<()> {
     if path.exists() {
         fs::remove_file(path)?;
     }
+    Ok(())
+}
+
+fn runtime_state_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("runtime-state.json")
+}
+
+fn load_runtime_state(data_dir: &Path) -> AppResult<Option<RuntimeState>> {
+    let path = runtime_state_path(data_dir);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(path)?;
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::from_str(&raw)?))
+}
+
+fn save_runtime_state(data_dir: &Path, state: &RuntimeState) -> AppResult<()> {
+    fs::create_dir_all(data_dir)?;
+    let raw = serde_json::to_string_pretty(state)?;
+    fs::write(runtime_state_path(data_dir), raw)?;
+    Ok(())
+}
+
+fn remove_runtime_state(data_dir: &Path) -> AppResult<()> {
+    let path = runtime_state_path(data_dir);
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+fn recover_runtime_state(data_dir: &Path) -> AppResult<()> {
+    let Some(state) = load_runtime_state(data_dir)? else {
+        return Ok(());
+    };
+    macos_route::restore_routes(&state.routes)?;
+    remove_runtime_state(data_dir)?;
     Ok(())
 }

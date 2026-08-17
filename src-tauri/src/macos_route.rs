@@ -2,6 +2,8 @@ use std::net::Ipv4Addr;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::{AppError, AppResult};
 use crate::helper;
 use crate::sslocal::TUN_ADDRESS;
@@ -15,13 +17,13 @@ pub struct RouteSnapshot {
     pub dns: Option<DnsSnapshot>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DnsSnapshot {
     pub service: String,
     pub servers: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppliedRoutes {
     pub tun_name: String,
     pub server_ip: String,
