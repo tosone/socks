@@ -1,32 +1,145 @@
 # socks
 
-macOS desktop client for [shadowsocks-rust](./shadowsocks-rust). The UI is Tauri 2 + React + Tailwind. The backend embeds `shadowsocks-service` as an in-process `sslocal` TUN client and can take over the system IPv4 default route.
+`socks` is a macOS desktop client for [shadowsocks-rust](./shadowsocks-rust). The UI is built with Tauri 2, React, and Tailwind CSS. The backend embeds `shadowsocks-service` and runs an in-process `sslocal` TUN client.
 
-This build is **macOS only**. Install the privileged helper once (administrator password). After that, connect/disconnect changes routes through a LaunchDaemon and does not prompt again.
+This project is macOS-only for now.
 
-## Run
+## Features
+
+- Manage Shadowsocks server profiles.
+- Connect through an in-process `sslocal` TUN client.
+- Route system IPv4 traffic through the TUN interface.
+- Install a privileged LaunchDaemon helper once, then connect and disconnect without repeated administrator prompts.
+- Show live upload and download speed with a sparkline for the recent traffic window.
+- Persist per-profile total upload and download traffic.
+- Bundle SIP003 plugin executables as app resources.
+
+## Requirements
+
+- macOS.
+- Rust 1.91 or newer.
+- Bun.
+- Xcode Command Line Tools.
+
+## Development
+
+Install dependencies:
 
 ```bash
 bun install
+```
+
+Run the Tauri development app:
+
+```bash
 bun run tauri dev
 ```
 
-Requirements: recent Rust (shadowsocks-service needs 1.91+), bun, and Xcode command line tools.
+Build the frontend only:
+
+```bash
+bun run build
+```
+
+Check the Rust backend:
+
+```bash
+cargo check --manifest-path src-tauri/Cargo.toml
+```
+
+## Packaging
+
+Build the macOS app package:
+
+```bash
+bun run tauri build
+```
+
+The app icon is generated from `public/socks.svg`. To regenerate the macOS icon resources:
+
+```bash
+bun run tauri icon public/socks.svg
+```
+
+Only the macOS icon resources are kept in the repository:
+
+```text
+src-tauri/icons/icon.icns
+src-tauri/icons/icon.png
+```
 
 ## Usage
 
-1. Click **安装助手** once and approve the macOS administrator prompt. This copies the current app binary to `/Library/PrivilegedHelperTools` and loads `com.tosone.socks.helper` as a LaunchDaemon.
-2. Click **创建** and fill in name, server, port, password, and cipher. Plugin fields are optional; the plugin binary must already be on `PATH`.
-3. Use the card switch to connect. Only one profile can be active. The helper then adds:
-   - host route: Shadowsocks server IP → original gateway
-   - `0.0.0.0/1` and `128.0.0.0/1` → the TUN interface (`10.255.0.1/24`)
-4. The card shows live up/down rates and a faint sparkline. Use **⋯** to edit or delete. Delete asks for confirmation and disconnects first if needed.
-5. Disconnect or quit the app to restore the previous routes. Use **卸载** if you want to remove the helper.
+1. Install the helper once from the app. This requires an administrator password and installs a LaunchDaemon helper under `/Library/PrivilegedHelperTools`.
+2. Create a profile with name, server, port, password, and encryption method.
+3. Optionally set a SIP003 plugin name and plugin options.
+4. Use the profile card menu to connect, disconnect, edit, or delete a profile.
+5. Only one profile can be active at a time. Connecting another profile disconnects the current one first.
+6. Disconnect or quit the app to restore the previous routes.
 
-Profiles are stored in the app data directory as `profiles.json`.
+When connected, the helper applies IPv4 routes similar to:
 
-## Notes
+```text
+<server-ip>      -> original gateway
+0.0.0.0/1        -> TUN interface
+128.0.0.0/1      -> TUN interface
+```
 
-- No App Sandbox, ACL/split routing, IPv6 default routes, SIP008 subscriptions, or bundled SIP003 plugins in this version.
-- Changing only IPv4 default routes can leave system DNS on the original resolver.
-- AEAD-2022 ciphers expect a Base64 key of the correct length (`ssservice genkey -m ...`).
+The TUN interface address is:
+
+```text
+10.255.0.1/24
+```
+
+## Data Files
+
+Profiles are stored in the Tauri app data directory:
+
+```text
+profiles.json
+```
+
+Per-profile traffic totals are stored separately:
+
+```text
+traffic/<profile-id>.json
+```
+
+On macOS, the app data directory is typically:
+
+```text
+~/Library/Application Support/com.tosone.socks/
+```
+
+Traffic sparkline samples are kept in memory only. They cover the recent traffic window and are discarded on disconnect, reconnect, or app restart.
+
+## Bundled Plugins
+
+SIP003 plugins can be bundled as Tauri resources. Put plugin executables under:
+
+```text
+src-tauri/resources/plugins/
+```
+
+The current bundle configuration maps:
+
+```text
+src-tauri/resources/plugins/v2ray-plugin/v2ray-plugin -> plugins/v2ray-plugin
+```
+
+When a profile uses a plugin name without path separators, the app first checks the bundled plugin resource directory. For example, `v2ray-plugin` resolves to:
+
+```text
+<App>.app/Contents/Resources/plugins/v2ray-plugin
+```
+
+If no bundled executable is found, the app falls back to the system `PATH`. Absolute plugin paths are used as-is.
+
+## Limitations
+
+- IPv6 default routes are not managed yet.
+- DNS may still use the original system resolver.
+- SIP008 subscriptions are not implemented yet.
+- App Sandbox is not enabled.
+- Bundled plugin binaries must match the target macOS CPU architecture.
+- AEAD-2022 methods require a Base64 key of the correct length.
