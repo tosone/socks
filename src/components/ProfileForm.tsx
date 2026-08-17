@@ -31,7 +31,9 @@ export function ProfileForm({
   const [port, setPort] = useState(String(initial?.port ?? 8388));
   const [password, setPassword] = useState(initial?.password ?? "");
   const [passwordVisible, setPasswordVisible] = useState(false);
-  const [method, setMethod] = useState(initial?.method ?? ciphers[0] ?? "aes-256-gcm");
+  const [method, setMethod] = useState(
+    initial?.method ?? ciphers[0] ?? "2022-blake3-chacha20-poly1305",
+  );
   const [plugin, setPlugin] = useState(initial?.plugin ?? "");
   const [pluginOpts, setPluginOpts] = useState(initial?.pluginOpts ?? "");
   const [errors, setErrors] = useState<FormErrors>({});

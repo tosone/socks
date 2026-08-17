@@ -49,7 +49,7 @@ RUN cat > /usr/local/bin/docker-entrypoint.sh <<'EOF'
 set -eu
 
 cat > /etc/shadowsocks-rust/config.json <<EOF_CONFIG
-{"server":"0.0.0.0","server_port":443,"password":"${SS_PASSWORD:-change-me}","timeout":300,"method":"${SS_METHOD:-aes-256-gcm}","plugin":"v2ray-plugin","plugin_opts":"server;tls;host=${SS_DOMAIN:-example.com}","plugin_mode":"tcp_only"}
+{"server":"0.0.0.0","server_port":443,"password":"${SS_PASSWORD:-change-me}","timeout":300,"method":"${SS_METHOD:-2022-blake3-chacha20-poly1305}","plugin":"v2ray-plugin","plugin_opts":"server;tls;host=${SS_DOMAIN:-example.com}","plugin_mode":"tcp_only"}
 EOF_CONFIG
 
 exec "$@"
@@ -64,4 +64,4 @@ CMD ["ssserver", "--log-without-time", "-a", "nobody", "-c", "/etc/shadowsocks-r
 
 # sslocal -b 127.0.0.1:1080 -s example.com:443 -m "$SS_METHOD" -k "$SS_PASSWORD" --plugin v2ray-plugin --plugin-opts "tls;host=example.com"
 # docker buildx build --platform linux/amd64,linux/arm64 -f build/Dockerfile -t socks-server:latest .
-# docker run --rm -e SS_DOMAIN=example.com -e SS_PASSWORD=change-me -e SS_METHOD=aes-256-gcm -p 443:443/tcp socks-server:latest
+# docker run --rm -e SS_DOMAIN=example.com -e SS_PASSWORD=change-me -e SS_METHOD=2022-blake3-chacha20-poly1305 -p 443:443/tcp socks-server:latest

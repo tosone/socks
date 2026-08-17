@@ -506,7 +506,7 @@ export default function App() {
                 <p className="mt-1 text-xs opacity-80">
                   {helperInstalled
                     ? "Routes are changed by a background helper. Connecting no longer asks for a password."
-                    : "Install once (administrator password). Later connects will not prompt again."}
+                    : "Install once; future connects skip admin prompts."}
                 </p>
               </div>
               {helperInstalled ? (
