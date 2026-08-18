@@ -7,3 +7,11 @@
 *::-webkit-scrollbar {
   display: none;
 }
+
+.xterm .xterm-scrollable-element > .scrollbar {
+  display: none !important;
+}
+
+.xterm .xterm-scrollable-element > .shadow {
+  display: none !important;
+}

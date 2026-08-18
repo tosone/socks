@@ -18,6 +18,54 @@ import type { ProfileInput, SshAuthMode, SshRunEvent } from "../types";
 const PRIVATE_KEY_PATH_KEY = "socks.ssh.privateKeyPath";
 const DEFAULT_PRIVATE_KEY_PATH = "~/.ssh/id_ed25519";
 const DEFAULT_METHOD = "2022-blake3-chacha20-poly1305";
+const PREVIEW_LOGS: LogEntry[] = [
+  {
+    id: 1,
+    stream: "system",
+    data: "\x1b[90m$ ssh root@192.0.2.10 -p 22 -i ~/.ssh/id_ed25519\x1b[0m\n",
+  },
+  { id: 2, stream: "stdout", data: "Connected to server.\n" },
+  {
+    id: 3,
+    stream: "stdout",
+    data: "Checking remote environment: kernel=6.8.0-31-generic arch=x86_64 distro=ubuntu-24.04 docker=missing systemd=available.\n",
+  },
+  {
+    id: 4,
+    stream: "stdout",
+    data: "Installing Docker with get.docker.com...\n# Executing docker install script, commit: 7cae5f8b0decc17d6571f9f52eb840fbc13b2737\n+ sh -c apt-get -qq update >/dev/null\n+ sh -c DEBIAN_FRONTEND=noninteractive apt-get -y -qq install ca-certificates curl >/dev/null\n",
+  },
+  {
+    id: 5,
+    stream: "stdout",
+    data: "Pulling ghcr.io/tosone/socks:latest\nlatest: Pulling from tosone/socks\n9fda8d8052c6: Pull complete\n7fb72a7d1a8e: Pull complete\n1a2d15f7c314: Pull complete\nDigest: sha256:7aeb21d4f67c0a51f6d32b633ad4f1ab33e37c96a99cc376e8d4de1a78c8d5ef\nStatus: Downloaded newer image for ghcr.io/tosone/socks:latest\n",
+  },
+  {
+    id: 6,
+    stream: "stdout",
+    data: "Starting container with command:\ndocker run -d --name socks-server --restart unless-stopped -p 443:443/tcp -e SS_PASSWORD=change-me -e SS_METHOD=2022-blake3-chacha20-poly1305 -e SS_DOMAIN=www.example.com ghcr.io/tosone/socks:latest\n",
+  },
+  {
+    id: 7,
+    stream: "stdout",
+    data: "Derived 2022 cipher key from plain password. The original short password stays in the UI, while the runtime config receives a fixed-length Base64 key required by shadowsocks-rust.\n",
+  },
+  {
+    id: 8,
+    stream: "stderr",
+    data: "warning: existing socks-server container was found and will be replaced for this preview-sized run.\nold container id: 8f0f2e9a6b04b3f57d7cc0b6c8af4a0e2f5227e7d2f3b7b1c9a10d9f9d52d0bb\n",
+  },
+  {
+    id: 9,
+    stream: "stdout",
+    data: "Container started: 4d4a75ff0fdd4c6aee319de8294bbff69fbcf6b7d89f0c2b6d9a06c25c4d5ef7\nListening on tcp://0.0.0.0:443\nPlugin: v2ray-plugin server;tls;host=www.example.com\n",
+  },
+  {
+    id: 10,
+    stream: "system",
+    data: "\x1b[32mServer is ready. Add server to profiles.\x1b[0m\n",
+  },
+];
 
 type LogEntry = {
   id: number;
@@ -323,20 +371,15 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
             <ChevronsDown size={16} />
           </button>
         </div>
-        <div className="h-full px-3 pb-2 pt-3">
+        <div className="h-full pb-0 pl-3 pr-1 pt-3">
           <div className="h-full font-mono text-[12px] leading-5 text-zinc-100">
-            {logs.length === 0 ? (
-              <pre className="whitespace-pre-wrap text-zinc-500">
-                {"> Waiting for execution.\n> Fill IP and authentication to run."}
-              </pre>
-            ) : (
-              <TerminalOutput
-                logs={logs}
-                follow={follow}
-                terminalRef={terminalRef}
-                onFollowChange={setFollow}
-              />
-            )}
+            <TerminalOutput
+              logs={logs.length === 0 ? PREVIEW_LOGS : logs}
+              follow={follow}
+              resetKey={logs.length === 0 ? "preview" : "live"}
+              terminalRef={terminalRef}
+              onFollowChange={setFollow}
+            />
           </div>
         </div>
       </div>
@@ -506,17 +549,20 @@ function clampPort(value: number) {
 function TerminalOutput({
   logs,
   follow,
+  resetKey,
   terminalRef,
   onFollowChange,
 }: {
   logs: LogEntry[];
   follow: boolean;
+  resetKey: string;
   terminalRef: RefObject<Terminal | null>;
   onFollowChange: (follow: boolean) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const lastLogIdRef = useRef(0);
+  const pendingNewlineRef = useRef(false);
   const followRef = useRef(follow);
 
   useEffect(() => {
@@ -586,8 +632,15 @@ function TerminalOutput({
       terminalRef.current = null;
       fitAddonRef.current = null;
       lastLogIdRef.current = 0;
+      pendingNewlineRef.current = false;
     };
   }, [onFollowChange, terminalRef]);
+
+  useEffect(() => {
+    terminalRef.current?.reset();
+    lastLogIdRef.current = 0;
+    pendingNewlineRef.current = false;
+  }, [resetKey, terminalRef]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -598,6 +651,7 @@ function TerminalOutput({
     if (logs.length === 0) {
       terminal.reset();
       lastLogIdRef.current = 0;
+      pendingNewlineRef.current = false;
       return;
     }
 
@@ -607,12 +661,15 @@ function TerminalOutput({
       return;
     }
 
-    for (const log of logs.slice(firstNewLogIndex)) {
-      terminal.write(formatTerminalLog(log), () => {
+    const newLogs = logs.slice(firstNewLogIndex);
+    for (const [index, log] of newLogs.entries()) {
+      const trimTrailingNewline = index === newLogs.length - 1;
+      terminal.write(formatTerminalLog(log, trimTrailingNewline, pendingNewlineRef.current), () => {
         if (followRef.current) {
           terminal.scrollToBottom();
         }
       });
+      pendingNewlineRef.current = trimTrailingNewline && /[\r\n]+$/.test(log.data);
       lastLogIdRef.current = log.id;
     }
   }, [logs, terminalRef]);
@@ -620,9 +677,11 @@ function TerminalOutput({
   return <div ref={containerRef} className="h-full min-h-full [&_.xterm]:h-full [&_.xterm-viewport]:!overflow-y-auto" />;
 }
 
-function formatTerminalLog(log: LogEntry) {
+function formatTerminalLog(log: LogEntry, trimTrailingNewline = false, prependNewline = false) {
+  const text = trimTrailingNewline ? log.data.replace(/[\r\n]+$/, "") : log.data;
+  const data = prependNewline ? `\n${text}` : text;
   if (log.stream !== "stderr") {
-    return log.data;
+    return data;
   }
-  return `\x1b[91m${log.data}\x1b[0m`;
+  return `\x1b[91m${data}\x1b[0m`;
 }

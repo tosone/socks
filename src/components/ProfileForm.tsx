@@ -142,7 +142,7 @@ export function ProfileForm({
             <input
               value={pluginOpts}
               onChange={(e) => setPluginOpts(e.target.value)}
-              placeholder="obfs=http;obfs-host=www.example.com"
+              placeholder="tls;host=www.example.com"
               className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-400"
             />
           </Field>

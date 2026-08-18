@@ -54,18 +54,56 @@ pub fn current_default_route() -> AppResult<RouteSnapshot> {
         }
     }
     match (gateway, interface) {
-        (Some(gateway), Some(interface)) => {
-            let dns = current_dns_snapshot(&interface).ok();
-            Ok(RouteSnapshot {
-                gateway,
-                interface,
-                dns,
-            })
-        }
-        _ => Err(AppError::msg(
-            "Could not parse the default gateway or interface",
-        )),
+        (Some(gateway), Some(interface)) => snapshot_with_dns(gateway, interface),
+        _ => current_default_route_from_netstat().or_else(|_| {
+            Err(AppError::msg(
+                "Could not parse the default gateway or interface",
+            ))
+        }),
     }
+}
+
+fn current_default_route_from_netstat() -> AppResult<RouteSnapshot> {
+    let output = Command::new("netstat")
+        .args(["-rn", "-f", "inet"])
+        .output()
+        .map_err(|err| AppError::msg(format!("Failed to read the routing table: {err}")))?;
+    if !output.status.success() {
+        return Err(AppError::msg(stderr_or(
+            &output,
+            "Failed to read the routing table",
+        )));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines().map(str::trim) {
+        let mut fields = line.split_whitespace();
+        if fields.next() != Some("default") {
+            continue;
+        }
+        let Some(gateway) = fields.next() else {
+            continue;
+        };
+        if gateway.parse::<Ipv4Addr>().is_err() {
+            continue;
+        }
+        let _flags = fields.next();
+        let Some(interface) = fields.next() else {
+            continue;
+        };
+        return snapshot_with_dns(gateway.to_string(), interface.to_string());
+    }
+    Err(AppError::msg(
+        "Could not parse the default gateway or interface from the routing table",
+    ))
+}
+
+fn snapshot_with_dns(gateway: String, interface: String) -> AppResult<RouteSnapshot> {
+    let dns = current_dns_snapshot(&interface).ok();
+    Ok(RouteSnapshot {
+        gateway,
+        interface,
+        dns,
+    })
 }
 
 pub async fn wait_for_tun_name(timeout: Duration) -> AppResult<String> {
