@@ -15,10 +15,6 @@ import type { ProfileInput, SshAuthMode, SshRunEvent } from "../types";
 const PRIVATE_KEY_PATH_KEY = "socks.ssh.privateKeyPath";
 const DEFAULT_PRIVATE_KEY_PATH = "~/.ssh/id_ed25519";
 const DEFAULT_METHOD = "2022-blake3-chacha20-poly1305";
-const inputBaseClass =
-  "h-10 w-full rounded-lg border border-zinc-300 bg-white text-sm text-zinc-900 outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200";
-const inputClass = `${inputBaseClass} px-3`;
-const passwordInputClass = `${inputBaseClass} py-0 pl-3 pr-10`;
 const ANSI_PATTERN = /\x1b\[([0-9;]*)m/g;
 const ANSI_COLORS: Record<number, string> = {
   30: "#555f6d",
@@ -245,13 +241,13 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
             <p className="mb-1.5 text-xs font-medium text-zinc-500">IP / Port</p>
             <div className="grid grid-cols-[1fr_5rem] gap-2">
               <input
-                className={inputClass}
+                className="h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200"
                 value={host}
                 placeholder="192.0.2.10"
                 onChange={(event) => setHost(event.target.value)}
               />
               <input
-                className={`${inputClass} appearance-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
+                className="h-10 w-full appearance-none rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 min={1}
                 max={65535}
                 type="number"
@@ -261,23 +257,21 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
             </div>
           </div>
         </div>
-        <div className="mt-3">
+
+        <div className="mt-3 grid grid-cols-[7.5rem_1fr_6.5rem] items-end gap-2">
           <FieldText
             label="User"
             value={username}
             placeholder="root"
             onChange={setUsername}
           />
-        </div>
-
-        <div className="mt-3">
-          <p className="mb-1.5 text-xs font-medium text-zinc-500">
-            {authMode === "key" ? "Private key path" : "SSH password"}
-          </p>
-          <div className="grid grid-cols-[1fr_6.5rem] gap-2">
+          <div>
+            <p className="mb-1.5 text-xs font-medium text-zinc-500">
+              {authMode === "key" ? "Private key path" : "SSH password"}
+            </p>
             {authMode === "key" ? (
               <input
-                className={inputClass}
+                className="h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200"
                 value={privateKeyPath}
                 placeholder="~/.ssh/id_ed25519"
                 onChange={(event) => setPrivateKeyPath(event.target.value)}
@@ -290,15 +284,17 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
                 onToggle={() => setPasswordVisible((current) => !current)}
               />
             )}
-            <button
-              type="button"
-              className="inline-flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-700 hover:bg-zinc-100"
-              onClick={() => setAuthMode((current) => (current === "key" ? "password" : "key"))}
-            >
-              {authMode === "key" ? "Password" : "Key"}
-            </button>
           </div>
+          <button
+            type="button"
+            className="inline-flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-700 hover:bg-zinc-100"
+            onClick={() => setAuthMode((current) => (current === "key" ? "password" : "key"))}
+          >
+            {authMode === "key" ? "Password" : "Key"}
+          </button>
         </div>
+
+        <div className="mt-4 border-t border-zinc-200" />
 
         <div className="mt-3 grid grid-cols-[1fr_11rem] gap-3">
           <FieldSelect
@@ -398,7 +394,7 @@ function FieldText({
     <div>
       <p className="mb-1.5 text-xs font-medium text-zinc-500">{label}</p>
       <input
-        className={inputClass}
+        className="h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200"
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
@@ -442,7 +438,7 @@ function PasswordInput({
   return (
     <div className="relative">
       <input
-        className={passwordInputClass}
+        className="h-10 w-full rounded-lg border border-zinc-300 bg-white py-0 pl-3 pr-10 text-sm text-zinc-900 outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200"
         type={visible ? "text" : "password"}
         value={value}
         onChange={(event) => onChange(event.target.value)}
@@ -490,7 +486,7 @@ function FieldSelect({
       <div className="relative" ref={rootRef}>
         <button
           type="button"
-          className={`${inputClass} flex cursor-pointer items-center justify-between gap-2 text-left`}
+          className="flex h-10 w-full cursor-pointer items-center justify-between gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-left text-sm text-zinc-900 outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200"
           onClick={() => setOpen((current) => !current)}
           aria-haspopup="listbox"
           aria-expanded={open}

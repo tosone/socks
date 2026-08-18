@@ -4,12 +4,6 @@ import { Check, ChevronDown, Eye, EyeOff } from "lucide-react";
 import type { Profile, ProfileInput } from "../types";
 
 const MAX_PROFILE_NAME_CHARS = 10;
-const overlayClass = "fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4";
-const formClass = "max-h-[90vh] w-full max-w-sm overflow-y-auto rounded-2xl bg-white p-5 shadow-xl";
-const secondaryButtonClass =
-  "cursor-pointer rounded-lg border border-zinc-200 px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-50";
-const primaryButtonClass =
-  "cursor-pointer rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60";
 
 type ProfileFormProps = {
   title: string;
@@ -86,8 +80,8 @@ export function ProfileForm({
   }
 
   return (
-    <div className={overlayClass}>
-      <form className={formClass} onSubmit={handleSubmit}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <form className="max-h-[90vh] w-full max-w-sm overflow-y-auto rounded-2xl bg-white p-5 shadow-xl" onSubmit={handleSubmit}>
         <h2 className="text-lg font-semibold text-zinc-900">{title}</h2>
         <div className="mt-4 grid gap-4">
           <Field label="Name" error={errors.name}>
@@ -95,15 +89,23 @@ export function ProfileForm({
               value={name}
               onChange={(e) => setName(e.target.value)}
               maxLength={MAX_PROFILE_NAME_CHARS}
-              className={inputClass}
+              className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-400"
             />
           </Field>
           <div className="grid grid-cols-3 gap-3">
             <Field label="Server" className="col-span-2" error={errors.server}>
-              <input value={server} onChange={(e) => setServer(e.target.value)} className={inputClass} />
+              <input
+                value={server}
+                onChange={(e) => setServer(e.target.value)}
+                className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-400"
+              />
             </Field>
             <Field label="Port" error={errors.port}>
-              <input value={port} onChange={(e) => setPort(e.target.value)} className={inputClass} />
+              <input
+                value={port}
+                onChange={(e) => setPort(e.target.value)}
+                className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-400"
+              />
             </Field>
           </div>
           <Field label="Password" error={errors.password}>
@@ -112,7 +114,7 @@ export function ProfileForm({
                 type={passwordVisible ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className={`${inputClass} pr-10`}
+                className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 pr-10 text-sm text-zinc-900 outline-none focus:border-zinc-400"
               />
               <button
                 type="button"
@@ -133,7 +135,7 @@ export function ProfileForm({
               value={plugin}
               onChange={(e) => setPlugin(e.target.value)}
               placeholder="v2ray-plugin"
-              className={inputClass}
+              className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-400"
             />
           </Field>
           <Field label="Plugin options (optional)">
@@ -141,7 +143,7 @@ export function ProfileForm({
               value={pluginOpts}
               onChange={(e) => setPluginOpts(e.target.value)}
               placeholder="obfs=http;obfs-host=www.example.com"
-              className={inputClass}
+              className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-400"
             />
           </Field>
         </div>
@@ -149,7 +151,7 @@ export function ProfileForm({
         <div className="mt-6 flex justify-end gap-2">
           <button
             type="button"
-            className={secondaryButtonClass}
+            className="cursor-pointer rounded-lg border border-zinc-200 px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-50"
             onClick={onCancel}
             disabled={busy}
           >
@@ -157,7 +159,7 @@ export function ProfileForm({
           </button>
           <button
             type="submit"
-            className={primaryButtonClass}
+            className="cursor-pointer rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60"
             disabled={busy}
           >
             {busy ? "Saving…" : "Save"}
@@ -188,8 +190,6 @@ function Field({
   );
 }
 
-const inputClass =
-  "w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-400";
 function CipherSelect({
   value,
   options,
@@ -216,7 +216,7 @@ function CipherSelect({
     <div className="relative" ref={rootRef}>
       <button
         type="button"
-        className={`${inputClass} flex cursor-pointer items-center justify-between gap-2 text-left`}
+        className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-left text-sm text-zinc-900 outline-none focus:border-zinc-400"
         onClick={() => setOpen((current) => !current)}
         aria-haspopup="listbox"
         aria-expanded={open}
