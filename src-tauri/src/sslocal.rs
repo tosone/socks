@@ -124,9 +124,15 @@ fn resolve_plugin_path(plugin: &str, bundled_plugin_dir: Option<&Path>) -> Strin
 }
 
 pub async fn start_local(config: Config) -> AppResult<LocalRuntime> {
-    let server = Server::new(config)
-        .await
-        .map_err(|err| AppError::msg(format!("Failed to start sslocal: {err}")))?;
+    let server = Server::new(config).await.map_err(|err| {
+        let message = err.to_string();
+        if message.contains("Operation not permitted") || message.contains("os error 1") {
+            return AppError::msg(format!(
+                "Failed to start sslocal: {message}. The privileged helper is installed for route and DNS changes, but TUN creation still runs inside the app process and was denied by macOS."
+            ));
+        }
+        AppError::msg(format!("Failed to start sslocal: {message}"))
+    })?;
     let flow_stat = server.server_balancer().context().flow_stat();
     Ok(LocalRuntime { server, flow_stat })
 }

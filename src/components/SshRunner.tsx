@@ -16,6 +16,7 @@ import { runSshSample } from "../api";
 import type { ProfileInput, SshAuthMode, SshRunEvent } from "../types";
 
 const PRIVATE_KEY_PATH_KEY = "socks.ssh.privateKeyPath";
+const INSTALLER_STATE_KEY = "socks.ssh.installerState";
 const DEFAULT_PRIVATE_KEY_PATH = "~/.ssh/id_ed25519";
 const DEFAULT_METHOD = "2022-blake3-chacha20-poly1305";
 const PREVIEW_LOGS: LogEntry[] = [
@@ -73,23 +74,42 @@ type LogEntry = {
   data: string;
 };
 
+type InstallerState = {
+  host: string;
+  port: number;
+  username: string;
+  authMode: SshAuthMode;
+  privateKeyPath: string;
+  password: string;
+  servicePassword: string;
+  method: string;
+  pluginDomain: string;
+};
+
 type SshRunnerProps = {
   ciphers: string[];
   onAddProfile: (input: ProfileInput) => Promise<void>;
 };
 
 export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
-  const [host, setHost] = useState("");
-  const [port, setPort] = useState(22);
-  const [username, setUsername] = useState("root");
-  const [authMode, setAuthMode] = useState<SshAuthMode>("key");
-  const [privateKeyPath, setPrivateKeyPath] = useState(DEFAULT_PRIVATE_KEY_PATH);
-  const [password, setPassword] = useState("");
+  const savedInstallerState = useMemo(() => loadInstallerState(), []);
+  const [host, setHost] = useState(savedInstallerState.host ?? "");
+  const [port, setPort] = useState(savedInstallerState.port ?? 22);
+  const [username, setUsername] = useState(savedInstallerState.username ?? "root");
+  const [authMode, setAuthMode] = useState<SshAuthMode>(savedInstallerState.authMode ?? "key");
+  const [privateKeyPath, setPrivateKeyPath] = useState(
+    savedInstallerState.privateKeyPath ?? DEFAULT_PRIVATE_KEY_PATH,
+  );
+  const [password, setPassword] = useState(savedInstallerState.password ?? "");
   const [passwordVisible, setPasswordVisible] = useState(false);
-  const [servicePassword, setServicePassword] = useState("change-me");
+  const [servicePassword, setServicePassword] = useState(
+    savedInstallerState.servicePassword ?? "change-me",
+  );
   const [servicePasswordVisible, setServicePasswordVisible] = useState(false);
-  const [method, setMethod] = useState(ciphers[0] ?? DEFAULT_METHOD);
-  const [pluginDomain, setPluginDomain] = useState("");
+  const [method, setMethod] = useState(
+    savedInstallerState.method ?? ciphers[0] ?? DEFAULT_METHOD,
+  );
+  const [pluginDomain, setPluginDomain] = useState(savedInstallerState.pluginDomain ?? "");
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [running, setRunning] = useState(false);
   const [installedProfile, setInstalledProfile] = useState<ProfileInput | null>(null);
@@ -101,10 +121,10 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
 
   useEffect(() => {
     const savedPath = window.localStorage.getItem(PRIVATE_KEY_PATH_KEY);
-    if (savedPath) {
+    if (savedPath && !savedInstallerState.privateKeyPath) {
       setPrivateKeyPath(savedPath);
     }
-  }, []);
+  }, [savedInstallerState.privateKeyPath]);
 
   useEffect(() => {
     if (authMode === "key") {
@@ -113,6 +133,36 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
   }, [authMode, privateKeyPath]);
 
   useEffect(() => {
+    window.localStorage.setItem(
+      INSTALLER_STATE_KEY,
+      JSON.stringify({
+        host,
+        port,
+        username,
+        authMode,
+        privateKeyPath,
+        password,
+        servicePassword,
+        method,
+        pluginDomain,
+      } satisfies InstallerState),
+    );
+  }, [
+    authMode,
+    host,
+    method,
+    password,
+    pluginDomain,
+    port,
+    privateKeyPath,
+    servicePassword,
+    username,
+  ]);
+
+  useEffect(() => {
+    if (ciphers.length === 0) {
+      return;
+    }
     if (!ciphers.includes(method)) {
       setMethod(ciphers[0] ?? DEFAULT_METHOD);
     }
@@ -544,6 +594,32 @@ function clampPort(value: number) {
     return 22;
   }
   return Math.min(Math.max(Math.trunc(value), 1), 65535);
+}
+
+function loadInstallerState(): Partial<InstallerState> {
+  const raw = window.localStorage.getItem(INSTALLER_STATE_KEY);
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<InstallerState>;
+    return {
+      host: typeof parsed.host === "string" ? parsed.host : undefined,
+      port: typeof parsed.port === "number" ? clampPort(parsed.port) : undefined,
+      username: typeof parsed.username === "string" ? parsed.username : undefined,
+      authMode:
+        parsed.authMode === "key" || parsed.authMode === "password" ? parsed.authMode : undefined,
+      privateKeyPath:
+        typeof parsed.privateKeyPath === "string" ? parsed.privateKeyPath : undefined,
+      password: typeof parsed.password === "string" ? parsed.password : undefined,
+      servicePassword:
+        typeof parsed.servicePassword === "string" ? parsed.servicePassword : undefined,
+      method: typeof parsed.method === "string" ? parsed.method : undefined,
+      pluginDomain: typeof parsed.pluginDomain === "string" ? parsed.pluginDomain : undefined,
+    };
+  } catch {
+    return {};
+  }
 }
 
 function TerminalOutput({
