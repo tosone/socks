@@ -1,0 +1,18 @@
+[Unit]
+Description=socks sslocal TUN client
+Documentation=https://github.com/shadowsocks/shadowsocks-rust
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=SOCKS_CONFIG=/etc/socks/socks.env
+EnvironmentFile=-/etc/socks/socks.env
+ExecStart=/usr/bin/env bash /opt/socks/socks-run.sh
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

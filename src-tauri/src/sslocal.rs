@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use ipnet::IpNet;
+use shadowsocks_service::acl::AccessControl;
 use shadowsocks_service::config::{
     Config, ConfigType, LocalConfig, LocalInstanceConfig, ProtocolType, ServerInstanceConfig,
 };
@@ -20,6 +21,7 @@ use crate::profile::Profile;
 pub const TUN_ADDRESS: &str = "10.255.0.1/24";
 pub const DNS_RELAY_PORT: u16 = 5353;
 pub const REMOTE_DNS_PORT: u16 = 53;
+const ACL_PATH: &str = ".config/socks/shadowsocks.acl";
 
 pub struct LocalRuntime {
     pub server: Server,
@@ -89,7 +91,21 @@ pub fn build_server_config(
 
     config.server.push(instance);
     config.outbound_bind_interface = outbound_bind_interface;
+    if let Some(acl_path) = user_acl_path() {
+        config.acl = Some(
+            AccessControl::load_from_file(&acl_path)
+                .map_err(|err| AppError::msg(format!("Failed to load ACL {}: {err}", acl_path.display())))?,
+        );
+    }
     Ok(config)
+}
+
+fn user_acl_path() -> Option<PathBuf> {
+    let path = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join(ACL_PATH))?;
+
+    path.is_file().then_some(path)
 }
 
 fn resolve_plugin_path(plugin: &str, bundled_plugin_dir: Option<&Path>) -> String {
