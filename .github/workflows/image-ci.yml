@@ -27,16 +27,6 @@ jobs:
             runner: ubuntu-24.04-arm
             platform: linux/arm64
     steps:
-      - name: Delete huge unnecessary folders and clean apt cache
-        if: matrix.arch == 'arm64'
-        shell: bash
-        run: |
-          sudo rm -rf /opt/hostedtoolcache
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          sudo apt-get clean
-
       - name: Checkout branch
         uses: actions/checkout@v7
         with:
