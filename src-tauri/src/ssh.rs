@@ -268,7 +268,26 @@ fn install_command(input: &SshRunInput) -> AppResult<String> {
         format!(" -e SS_DOMAIN={}", shell_quote(domain))
     });
     let plugin_cert_command = plugin_domain.map_or_else(String::new, |_| {
-        "\nprintf 'SOCKS_PLUGIN_CERT_RAW='\nsudo docker exec socks-server sh -c \"sed -n '/BEGIN CERTIFICATE/,/END CERTIFICATE/p' /etc/socks/tls/tls.crt | sed '/BEGIN CERTIFICATE/d;/END CERTIFICATE/d' | tr -d '\\n'\"\nprintf '\\n'\n".to_string()
+        r#"
+for i in $(seq 1 20); do
+  if sudo docker exec socks-server test -s /etc/socks/tls/tls.crt >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.5
+done
+if ! sudo docker exec socks-server test -s /etc/socks/tls/tls.crt >/dev/null 2>&1; then
+  echo "TLS certificate was not generated in the socks-server container." >&2
+  sudo docker logs --tail 80 socks-server >&2 || true
+  exit 1
+fi
+plugin_cert_raw="$(sudo docker exec socks-server sh -c "sed -n '/BEGIN CERTIFICATE/,/END CERTIFICATE/p' /etc/socks/tls/tls.crt | sed '/BEGIN CERTIFICATE/d;/END CERTIFICATE/d' | tr -d '\n'")"
+if [ -z "$plugin_cert_raw" ]; then
+  echo "TLS certificate exists but could not be read from the socks-server container." >&2
+  exit 1
+fi
+printf 'SOCKS_PLUGIN_CERT_RAW=%s\n' "$plugin_cert_raw"
+"#
+        .to_string()
     });
     let password = password::normalize_for_method(input.method.trim(), &input.service_password)?;
     let password = shell_quote(&password);
