@@ -16,6 +16,7 @@ use shadowsocks_service::shadowsocks::plugin::PluginConfig;
 use shadowsocks_service::shadowsocks::relay::socks5::Address;
 
 use crate::error::{AppError, AppResult};
+use crate::password;
 use crate::profile::Profile;
 
 pub const TUN_ADDRESS: &str = "10.255.0.1/24";
@@ -42,7 +43,8 @@ pub fn build_server_config(
         ServerAddr::DomainName(profile.server.clone(), profile.port)
     };
 
-    let mut server_cfg = ServerConfig::new(addr, profile.password.clone(), method)
+    let password = password::normalize_for_method(&profile.method, &profile.password)?;
+    let mut server_cfg = ServerConfig::new(addr, password, method)
         .map_err(|err| AppError::msg(format!("Invalid server configuration: {err}")))?;
     server_cfg.set_mode(Mode::TcpAndUdp);
 
@@ -92,10 +94,9 @@ pub fn build_server_config(
     config.server.push(instance);
     config.outbound_bind_interface = outbound_bind_interface;
     if let Some(acl_path) = user_acl_path() {
-        config.acl = Some(
-            AccessControl::load_from_file(&acl_path)
-                .map_err(|err| AppError::msg(format!("Failed to load ACL {}: {err}", acl_path.display())))?,
-        );
+        config.acl = Some(AccessControl::load_from_file(&acl_path).map_err(|err| {
+            AppError::msg(format!("Failed to load ACL {}: {err}", acl_path.display()))
+        })?);
     }
     Ok(config)
 }

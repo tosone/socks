@@ -505,13 +505,6 @@ export default function App() {
             </div>
           </div>
 
-          {errorDialog ? (
-            <ErrorDialog
-              message={errorDialog}
-              onClose={() => setErrorDialog(null)}
-            />
-          ) : null}
-
           {sortedProfiles.length === 0 ? (
             <>
               <button
@@ -638,6 +631,13 @@ export default function App() {
             setFormOpen(false);
             setEditing(null);
           }}
+        />
+      ) : null}
+
+      {errorDialog ? (
+        <ErrorDialog
+          message={errorDialog}
+          onClose={() => setErrorDialog(null)}
         />
       ) : null}
 

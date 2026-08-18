@@ -10,6 +10,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::net::ToSocketAddrs;
 
 use crate::error::{AppError, AppResult};
+use crate::password;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,6 +23,7 @@ pub struct SshRunInput {
     pub password: Option<String>,
     pub service_password: String,
     pub method: String,
+    pub plugin_domain: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -216,7 +218,7 @@ pub async fn run_sample(app: AppHandle, input: SshRunInput) -> AppResult<SshRunR
         ),
     );
     let mut session = Session::connect(&input, (host.as_str(), port), &app).await?;
-    let command = install_command(&input);
+    let command = install_command(&input)?;
     emit_log(
         &app,
         SshLogStream::System,
@@ -248,21 +250,29 @@ async fn run_local_sample(app: &AppHandle) -> AppResult<SshRunResult> {
     })
 }
 
-fn install_command(input: &SshRunInput) -> String {
-    let domain = shell_quote(input.host.trim());
-    let password = shell_quote(&input.service_password);
+fn install_command(input: &SshRunInput) -> AppResult<String> {
+    let plugin_domain = input
+        .plugin_domain
+        .as_deref()
+        .map(str::trim)
+        .filter(|domain| !domain.is_empty());
+    let plugin_domain_env = plugin_domain.map_or_else(String::new, |domain| {
+        format!(" -e SS_DOMAIN={}", shell_quote(domain))
+    });
+    let password = password::normalize_for_method(input.method.trim(), &input.service_password)?;
+    let password = shell_quote(&password);
     let method = shell_quote(input.method.trim());
 
-    format!(
+    Ok(format!(
         r#"set -eu
 if ! command -v docker >/dev/null 2>&1; then
   curl -fsSL https://get.docker.com | sh
 fi
 docker pull ghcr.io/tosone/socks:latest
 docker rm -f socks-server >/dev/null 2>&1 || true
-docker run -d --name socks-server --restart unless-stopped -p 443:443/tcp -e SS_DOMAIN={domain} -e SS_PASSWORD={password} -e SS_METHOD={method} ghcr.io/tosone/socks:latest
+docker run -d --name socks-server --restart unless-stopped -p 443:443/tcp -e SS_PASSWORD={password} -e SS_METHOD={method}{plugin_domain_env} ghcr.io/tosone/socks:latest
 docker ps --filter name=socks-server"#
-    )
+    ))
 }
 
 fn shell_quote(value: &str) -> String {

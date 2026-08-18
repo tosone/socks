@@ -1,6 +1,7 @@
 mod error;
 mod helper;
 mod macos_route;
+mod password;
 mod profile;
 mod session;
 mod ssh;

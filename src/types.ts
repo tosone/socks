@@ -64,6 +64,7 @@ export type SshRunInput = {
   password?: string | null;
   servicePassword: string;
   method: string;
+  pluginDomain?: string | null;
 };
 
 export type SshRunEvent = {

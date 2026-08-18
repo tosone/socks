@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type UIEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { FitAddon } from "@xterm/addon-fit";
+import { Terminal } from "@xterm/xterm";
+import "@xterm/xterm/css/xterm.css";
 import {
   Check,
   ChevronDown,
@@ -15,37 +18,11 @@ import type { ProfileInput, SshAuthMode, SshRunEvent } from "../types";
 const PRIVATE_KEY_PATH_KEY = "socks.ssh.privateKeyPath";
 const DEFAULT_PRIVATE_KEY_PATH = "~/.ssh/id_ed25519";
 const DEFAULT_METHOD = "2022-blake3-chacha20-poly1305";
-const ANSI_PATTERN = /\x1b\[([0-9;]*)m/g;
-const ANSI_COLORS: Record<number, string> = {
-  30: "#555f6d",
-  31: "#ff6b6b",
-  32: "#4ade80",
-  33: "#facc15",
-  34: "#60a5fa",
-  35: "#f472b6",
-  36: "#22d3ee",
-  37: "#e5e7eb",
-  90: "#8b949e",
-  91: "#f87171",
-  92: "#86efac",
-  93: "#fde047",
-  94: "#93c5fd",
-  95: "#f9a8d4",
-  96: "#67e8f9",
-  97: "#f8fafc",
-};
 
 type LogEntry = {
   id: number;
   stream: SshRunEvent["stream"];
   data: string;
-};
-
-type Segment = {
-  text: string;
-  color?: string;
-  bold?: boolean;
-  dim?: boolean;
 };
 
 type SshRunnerProps = {
@@ -64,12 +41,13 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
   const [servicePassword, setServicePassword] = useState("change-me");
   const [servicePasswordVisible, setServicePasswordVisible] = useState(false);
   const [method, setMethod] = useState(ciphers[0] ?? DEFAULT_METHOD);
+  const [pluginDomain, setPluginDomain] = useState("");
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [running, setRunning] = useState(false);
   const [installedProfile, setInstalledProfile] = useState<ProfileInput | null>(null);
   const [addingProfile, setAddingProfile] = useState(false);
   const [follow, setFollow] = useState(true);
-  const logRef = useRef<HTMLDivElement | null>(null);
+  const terminalRef = useRef<Terminal | null>(null);
   const runningRef = useRef(false);
   const nextIdRef = useRef(1);
 
@@ -96,13 +74,12 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
     let unlisten: (() => void) | undefined;
     let disposed = false;
     listen<SshRunEvent>("ssh-run", (event) => {
-      const payload = normalizeTtyData(event.payload);
       setLogs((current) => [
         ...current,
         {
           id: nextIdRef.current++,
-          stream: payload.stream,
-          data: payload.data,
+          stream: event.payload.stream,
+          data: event.payload.data,
         },
       ]);
     }).then((fn) => {
@@ -122,7 +99,7 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
     if (!follow) {
       return;
     }
-    scrollToBottom();
+    terminalRef.current?.scrollToBottom();
   }, [follow, logs]);
 
   const canRun = useMemo(() => {
@@ -160,6 +137,7 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
         password: authMode === "password" ? password : null,
         servicePassword,
         method,
+        pluginDomain: pluginDomain.trim() || null,
       });
       if (result.exitStatus === 0) {
         setInstalledProfile(buildProfileInput());
@@ -190,14 +168,15 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
 
   function buildProfileInput(): ProfileInput {
     const server = host.trim();
+    const domain = pluginDomain.trim();
     return {
       name: server.slice(0, 10) || "server",
       server,
       port: 443,
       password: servicePassword,
       method,
-      plugin: "v2ray-plugin",
-      pluginOpts: `tls;host=${server}`,
+      plugin: domain ? "v2ray-plugin" : null,
+      pluginOpts: domain ? `tls;host=${domain}` : null,
     };
   }
 
@@ -212,25 +191,9 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
     ]);
   }
 
-  function handleLogScroll(event: UIEvent<HTMLDivElement>) {
-    const element = event.currentTarget;
-    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-    if (distanceFromBottom > 48) {
-      setFollow(false);
-    }
-  }
-
   function enableFollow() {
     setFollow(true);
-    window.requestAnimationFrame(scrollToBottom);
-  }
-
-  function scrollToBottom() {
-    const element = logRef.current;
-    if (!element) {
-      return;
-    }
-    element.scrollTop = element.scrollHeight;
+    window.requestAnimationFrame(() => terminalRef.current?.scrollToBottom());
   }
 
   return (
@@ -311,6 +274,15 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
             onToggle={() => setServicePasswordVisible((current) => !current)}
           />
         </div>
+
+        <div className="mt-3">
+          <FieldText
+            label="Plugin domain"
+            value={pluginDomain}
+            placeholder="example.com"
+            onChange={setPluginDomain}
+          />
+        </div>
       </div>
 
       <div className={`grid gap-2 ${installedProfile ? "grid-cols-2" : "grid-cols-1"}`}>
@@ -352,24 +324,18 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
           </button>
         </div>
         <div className="h-full px-3 pb-2 pt-3">
-          <div
-            ref={logRef}
-            className="h-full overflow-y-auto font-mono text-[12px] leading-5 text-zinc-100"
-            onScroll={handleLogScroll}
-          >
+          <div className="h-full font-mono text-[12px] leading-5 text-zinc-100">
             {logs.length === 0 ? (
               <pre className="whitespace-pre-wrap text-zinc-500">
                 {"> Waiting for execution.\n> Fill IP and authentication to run."}
               </pre>
             ) : (
-              logs.map((log) => (
-                <pre
-                  key={log.id}
-                  className={`whitespace-pre-wrap break-words ${log.stream === "stderr" ? "text-red-200" : ""}`}
-                >
-                  {renderAnsi(log.data)}
-                </pre>
-              ))
+              <TerminalOutput
+                logs={logs}
+                follow={follow}
+                terminalRef={terminalRef}
+                onFollowChange={setFollow}
+              />
             )}
           </div>
         </div>
@@ -537,69 +503,126 @@ function clampPort(value: number) {
   return Math.min(Math.max(Math.trunc(value), 1), 65535);
 }
 
-function normalizeTtyData(event: SshRunEvent): SshRunEvent {
-  return {
-    ...event,
-    data: event.data.replace(/\r\n/g, "\n").replace(/\r/g, "\n"),
-  };
-}
+function TerminalOutput({
+  logs,
+  follow,
+  terminalRef,
+  onFollowChange,
+}: {
+  logs: LogEntry[];
+  follow: boolean;
+  terminalRef: RefObject<Terminal | null>;
+  onFollowChange: (follow: boolean) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
+  const lastLogIdRef = useRef(0);
+  const followRef = useRef(follow);
 
-function renderAnsi(value: string) {
-  return parseAnsi(value).map((segment, index) => (
-    <span
-      key={`${index}-${segment.text}`}
-      style={{
-        color: segment.color,
-        fontWeight: segment.bold ? 700 : undefined,
-        opacity: segment.dim ? 0.72 : undefined,
-      }}
-    >
-      {segment.text}
-    </span>
-  ));
-}
-
-function parseAnsi(value: string): Segment[] {
-  const segments: Segment[] = [];
-  let color: string | undefined;
-  let bold = false;
-  let dim = false;
-  let index = 0;
-
-  for (const match of value.matchAll(ANSI_PATTERN)) {
-    if (match.index > index) {
-      segments.push({ text: value.slice(index, match.index), color, bold, dim });
+  useEffect(() => {
+    followRef.current = follow;
+    if (follow) {
+      terminalRef.current?.scrollToBottom();
     }
-    for (const code of parseAnsiCodes(match[1])) {
-      if (code === 0) {
-        color = undefined;
-        bold = false;
-        dim = false;
-      } else if (code === 1) {
-        bold = true;
-      } else if (code === 2) {
-        dim = true;
-      } else if (code === 22) {
-        bold = false;
-        dim = false;
-      } else if (code === 39) {
-        color = undefined;
-      } else if (ANSI_COLORS[code]) {
-        color = ANSI_COLORS[code];
+  }, [follow, terminalRef]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
+
+    const terminal = new Terminal({
+      allowTransparency: true,
+      convertEol: true,
+      cursorBlink: false,
+      cursorInactiveStyle: "none",
+      disableStdin: true,
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+      fontSize: 12,
+      lineHeight: 1.45,
+      scrollback: 5000,
+      theme: {
+        background: "#07090d",
+        foreground: "#f4f4f5",
+        cursor: "#f4f4f5",
+        black: "#3f3f46",
+        red: "#f87171",
+        green: "#4ade80",
+        yellow: "#facc15",
+        blue: "#60a5fa",
+        magenta: "#f472b6",
+        cyan: "#22d3ee",
+        white: "#e4e4e7",
+        brightBlack: "#71717a",
+        brightRed: "#fca5a5",
+        brightGreen: "#86efac",
+        brightYellow: "#fde047",
+        brightBlue: "#93c5fd",
+        brightMagenta: "#f9a8d4",
+        brightCyan: "#67e8f9",
+        brightWhite: "#fafafa",
+      },
+    });
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(container);
+    fitAddon.fit();
+    terminalRef.current = terminal;
+    fitAddonRef.current = fitAddon;
+
+    const scrollSubscription = terminal.onScroll(() => {
+      if (terminal.buffer.active.viewportY < terminal.buffer.active.baseY) {
+        onFollowChange(false);
       }
-    }
-    index = match.index + match[0].length;
-  }
+    });
+    const resizeObserver = new ResizeObserver(() => fitAddon.fit());
+    resizeObserver.observe(container);
 
-  if (index < value.length) {
-    segments.push({ text: value.slice(index), color, bold, dim });
-  }
-  return segments;
+    return () => {
+      scrollSubscription.dispose();
+      resizeObserver.disconnect();
+      terminal.dispose();
+      terminalRef.current = null;
+      fitAddonRef.current = null;
+      lastLogIdRef.current = 0;
+    };
+  }, [onFollowChange, terminalRef]);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) {
+      return;
+    }
+
+    if (logs.length === 0) {
+      terminal.reset();
+      lastLogIdRef.current = 0;
+      return;
+    }
+
+    const lastLogId = lastLogIdRef.current;
+    const firstNewLogIndex = logs.findIndex((log) => log.id > lastLogId);
+    if (firstNewLogIndex === -1) {
+      return;
+    }
+
+    for (const log of logs.slice(firstNewLogIndex)) {
+      terminal.write(formatTerminalLog(log), () => {
+        if (followRef.current) {
+          terminal.scrollToBottom();
+        }
+      });
+      lastLogIdRef.current = log.id;
+    }
+  }, [logs, terminalRef]);
+
+  return <div ref={containerRef} className="h-full min-h-full [&_.xterm]:h-full [&_.xterm-viewport]:!overflow-y-auto" />;
 }
 
-function parseAnsiCodes(raw: string) {
-  if (!raw) {
-    return [0];
+function formatTerminalLog(log: LogEntry) {
+  if (log.stream !== "stderr") {
+    return log.data;
   }
-  return raw.split(";").map((code) => Number(code || 0));
+  return `\x1b[91m${log.data}\x1b[0m`;
 }
