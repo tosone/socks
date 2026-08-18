@@ -214,6 +214,29 @@ impl AppState {
         let snapshot = macos_route::current_default_route()?;
         let server_ip = sslocal::resolve_server_ip(&profile.server, profile.port).await?;
         let local_dns_ip = local_dns_ip(&snapshot)?;
+        eprintln!(
+            "[socks] connect profile id={} name={} server={}:{} method={} plugin={} plugin_opts={} password_len={}",
+            profile.id,
+            profile.name,
+            profile.server,
+            profile.port,
+            profile.method,
+            profile.plugin.as_deref().unwrap_or("<none>"),
+            profile
+                .plugin_opts
+                .as_ref()
+                .map(|opts| format!("{} bytes", opts.len()))
+                .unwrap_or_else(|| "<none>".to_string()),
+            profile.password.len()
+        );
+        eprintln!(
+            "[socks] route snapshot gateway={} interface={} original_dns={:?} selected_local_dns={} server_ip={}",
+            snapshot.gateway,
+            snapshot.interface,
+            snapshot.dns.as_ref().map(|dns| &dns.servers),
+            local_dns_ip,
+            server_ip
+        );
         let bundled_plugin_dir = self
             .app
             .path()
@@ -222,6 +245,11 @@ impl AppState {
             .map(|path| path.join("plugins"));
         let tun_fd_path = self.data_dir.join("tun-fd.sock");
         let _ = fs::remove_file(&tun_fd_path);
+        eprintln!(
+            "[socks] tun fd path={} tun_address={}",
+            tun_fd_path.display(),
+            sslocal::TUN_ADDRESS
+        );
         let tun_fd_task = {
             let tun_fd_path = tun_fd_path.clone();
             tokio::task::spawn_blocking(move || {
@@ -255,11 +283,13 @@ impl AppState {
         tun_fd_task
             .await
             .map_err(|err| AppError::msg(format!("TUN helper task failed: {err}")))??;
+        eprintln!("[socks] sslocal Server::new succeeded; starting runtime loop");
         let flow_stat = runtime.flow_stat.clone();
 
+        let task_profile_id = profile.id.clone();
         let server_task = tokio::spawn(async move {
             if let Err(err) = runtime.server.run().await {
-                eprintln!("sslocal stopped: {err}");
+                eprintln!("[socks] sslocal stopped profile_id={task_profile_id}: {err:?}");
             }
         });
 

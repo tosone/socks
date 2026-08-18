@@ -284,6 +284,11 @@ fn provide_tun_fd_command(fd_path: &str, address: &str) -> AppResult<()> {
     if !fd_path.is_absolute() {
         return Err(AppError::msg("TUN fd socket path must be absolute"));
     }
+    eprintln!(
+        "[socks-helper] creating TUN fd for address={} socket={}",
+        address,
+        fd_path.display()
+    );
 
     let address = address
         .parse::<IpNet>()
@@ -296,10 +301,15 @@ fn provide_tun_fd_command(fd_path: &str, address: &str) -> AppResult<()> {
         .up();
     let device = tun::create(&config)
         .map_err(|err| AppError::msg(format!("Failed to create TUN device: {err}")))?;
+    eprintln!(
+        "[socks-helper] created TUN device fd={}, sending to app",
+        device.as_raw_fd()
+    );
     let stream = connect_with_retry(fd_path, Duration::from_secs(8))?;
     stream
         .send_with_fd(b"tun", &[device.as_raw_fd()])
         .map_err(|err| AppError::msg(format!("Failed to send TUN file descriptor: {err}")))?;
+    eprintln!("[socks-helper] sent TUN fd to app");
     Ok(())
 }
 

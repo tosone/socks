@@ -46,17 +46,32 @@ pub fn build_server_config(
     };
 
     let password = password::normalize_for_method(&profile.method, &profile.password)?;
+    eprintln!(
+        "[socks] build sslocal config server={}:{} method={} normalized_password_len={} outbound_if={:?}",
+        profile.server,
+        profile.port,
+        profile.method,
+        password.len(),
+        outbound_bind_interface
+    );
     let mut server_cfg = ServerConfig::new(addr, password, method)
         .map_err(|err| AppError::msg(format!("Invalid server configuration: {err}")))?;
     server_cfg.set_mode(Mode::TcpAndUdp);
 
     if let Some(plugin) = profile.plugin.as_ref() {
+        let resolved_plugin = resolve_plugin_path(plugin, bundled_plugin_dir);
+        eprintln!(
+            "[socks] build sslocal plugin path={} opts={:?}",
+            resolved_plugin, profile.plugin_opts
+        );
         server_cfg.set_plugin(PluginConfig {
-            plugin: resolve_plugin_path(plugin, bundled_plugin_dir),
+            plugin: resolved_plugin,
             plugin_opts: profile.plugin_opts.clone(),
             plugin_args: Vec::new(),
             plugin_mode: Mode::TcpAndUdp,
         });
+    } else {
+        eprintln!("[socks] build sslocal plugin disabled");
     }
 
     let mut instance = ServerInstanceConfig::with_server_config(server_cfg);
@@ -71,6 +86,7 @@ pub fn build_server_config(
     );
     #[cfg(unix)]
     if let Some(path) = tun_fd_path {
+        eprintln!("[socks] build sslocal tun fd path={}", path.display());
         local.tun_device_fd_from_path = Some(path.to_path_buf());
     }
 
@@ -93,6 +109,14 @@ pub fn build_server_config(
         IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
         REMOTE_DNS_PORT,
     )));
+    eprintln!(
+        "[socks] build sslocal dns bind=127.0.0.1:{} local_dns={}:{} remote_dns=8.8.8.8:{} mode={:?}",
+        DNS_RELAY_PORT,
+        local_dns_ip,
+        REMOTE_DNS_PORT,
+        REMOTE_DNS_PORT,
+        dns.mode
+    );
     config
         .local
         .push(LocalInstanceConfig::with_local_config(dns));
