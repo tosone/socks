@@ -484,18 +484,28 @@ export default function App() {
                 </p>
               </div>
               {helperInstalled ? (
-                <button
-                  type="button"
-                  className="rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs text-emerald-800 hover:bg-emerald-100 disabled:opacity-60"
-                  onClick={handleUninstallHelper}
-                  disabled={helperBusy}
-                >
-                  {helperBusy ? "Working…" : "Uninstall"}
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className="cursor-pointer rounded-lg bg-emerald-800 px-3 py-1.5 text-xs text-white hover:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-60"
+                    onClick={handleInstallHelper}
+                    disabled={helperBusy}
+                  >
+                    {helperBusy ? "Working…" : "Reinstall"}
+                  </button>
+                  <button
+                    type="button"
+                    className="cursor-pointer rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    onClick={handleUninstallHelper}
+                    disabled={helperBusy}
+                  >
+                    Uninstall
+                  </button>
+                </div>
               ) : (
                 <button
                   type="button"
-                  className="rounded-lg bg-zinc-900 px-3 py-1.5 text-xs text-white hover:bg-zinc-800 disabled:opacity-60"
+                  className="cursor-pointer rounded-lg bg-zinc-900 px-3 py-1.5 text-xs text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60"
                   onClick={handleInstallHelper}
                   disabled={helperBusy}
                 >

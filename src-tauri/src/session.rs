@@ -218,12 +218,40 @@ impl AppState {
             .resource_dir()
             .ok()
             .map(|path| path.join("plugins"));
+        let tun_fd_path = self.data_dir.join("tun-fd.sock");
+        let _ = fs::remove_file(&tun_fd_path);
+        let tun_fd_task = {
+            let tun_fd_path = tun_fd_path.clone();
+            tokio::task::spawn_blocking(move || {
+                helper::provide_tun_fd(&tun_fd_path, sslocal::TUN_ADDRESS)
+            })
+        };
         let config = sslocal::build_server_config(
             &profile,
             Some(snapshot.interface.clone()),
             bundled_plugin_dir.as_deref(),
+            Some(&tun_fd_path),
         )?;
-        let runtime = sslocal::start_local(config).await?;
+        let runtime =
+            match tokio::time::timeout(Duration::from_secs(10), sslocal::start_local(config)).await
+            {
+                Ok(Ok(runtime)) => runtime,
+                Ok(Err(err)) => {
+                    let _ = tun_fd_task.await;
+                    return Err(err);
+                }
+                Err(_) => {
+                    let helper_result = tun_fd_task
+                        .await
+                        .map_err(|err| AppError::msg(format!("TUN helper task failed: {err}")))?;
+                    return Err(helper_result.err().unwrap_or_else(|| {
+                        AppError::msg("Timed out waiting for TUN file descriptor")
+                    }));
+                }
+            };
+        tun_fd_task
+            .await
+            .map_err(|err| AppError::msg(format!("TUN helper task failed: {err}")))??;
         let flow_stat = runtime.flow_stat.clone();
 
         let server_task = tokio::spawn(async move {

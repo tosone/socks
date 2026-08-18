@@ -33,6 +33,7 @@ pub fn build_server_config(
     profile: &Profile,
     outbound_bind_interface: Option<String>,
     bundled_plugin_dir: Option<&Path>,
+    tun_fd_path: Option<&Path>,
 ) -> AppResult<Config> {
     let method = CipherKind::from_str(&profile.method)
         .map_err(|_| AppError::msg(format!("Unknown encryption method: {}", profile.method)))?;
@@ -67,6 +68,10 @@ pub fn build_server_config(
             .parse::<IpNet>()
             .map_err(|err| AppError::msg(format!("Invalid TUN address: {err}")))?,
     );
+    #[cfg(unix)]
+    if let Some(path) = tun_fd_path {
+        local.tun_device_fd_from_path = Some(path.to_path_buf());
+    }
 
     let mut config = Config::new(ConfigType::Local);
     config

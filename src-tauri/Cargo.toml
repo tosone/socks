@@ -28,6 +28,8 @@ ipnet = "2"
 base64 = "0.22"
 sha2 = "0.10"
 russh = "0.62.6"
+sendfd = "0.4"
+tun = "0.8"
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
 ] }

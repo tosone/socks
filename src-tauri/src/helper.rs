@@ -1,10 +1,13 @@
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 use std::{env, fs};
 
+use ipnet::IpNet;
+use sendfd::SendWithFd;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
@@ -32,6 +35,11 @@ pub enum HelperRequest {
         servers: Vec<String>,
         #[serde(rename = "relayPort")]
         relay_port: Option<u16>,
+    },
+    Tun {
+        #[serde(rename = "fdPath")]
+        fd_path: String,
+        address: String,
     },
 }
 
@@ -159,6 +167,23 @@ pub fn restore_dns(service: &str, servers: &[String]) -> AppResult<()> {
     })
 }
 
+pub fn provide_tun_fd(fd_path: &Path, address: &str) -> AppResult<()> {
+    send_request(&HelperRequest::Tun {
+        fd_path: fd_path.to_string_lossy().into_owned(),
+        address: address.to_string(),
+    })
+    .map_err(|err| {
+        let message = err.to_string();
+        if message.contains("Invalid helper request") || message.contains("unknown variant") {
+            AppError::msg(
+                "Installed helper is outdated. Reinstall helper once, then connect again.",
+            )
+        } else {
+            AppError::msg(message)
+        }
+    })
+}
+
 pub fn run_helper() {
     if let Err(err) = helper_main() {
         eprintln!("socks helper: {err}");
@@ -241,7 +266,56 @@ fn handle_client(stream: &mut UnixStream) -> AppResult<()> {
                 },
             )
         }
+        HelperRequest::Tun { fd_path, address } => {
+            provide_tun_fd_command(&fd_path, &address)?;
+            write_response(
+                stream,
+                &HelperResponse {
+                    ok: true,
+                    error: None,
+                },
+            )
+        }
     }
+}
+
+fn provide_tun_fd_command(fd_path: &str, address: &str) -> AppResult<()> {
+    let fd_path = Path::new(fd_path);
+    if !fd_path.is_absolute() {
+        return Err(AppError::msg("TUN fd socket path must be absolute"));
+    }
+
+    let address = address
+        .parse::<IpNet>()
+        .map_err(|err| AppError::msg(format!("Invalid TUN address: {err}")))?;
+    let mut config = tun::Configuration::default();
+    config
+        .layer(tun::Layer::L3)
+        .address(address.addr())
+        .netmask(address.netmask())
+        .up();
+    let device = tun::create(&config)
+        .map_err(|err| AppError::msg(format!("Failed to create TUN device: {err}")))?;
+    let stream = connect_with_retry(fd_path, Duration::from_secs(8))?;
+    stream
+        .send_with_fd(b"tun", &[device.as_raw_fd()])
+        .map_err(|err| AppError::msg(format!("Failed to send TUN file descriptor: {err}")))?;
+    Ok(())
+}
+
+fn connect_with_retry(path: &Path, timeout: Duration) -> AppResult<UnixStream> {
+    let deadline = Instant::now() + timeout;
+    let mut last = AppError::msg(format!("Timed out connecting to {}", path.display()));
+    while Instant::now() < deadline {
+        match UnixStream::connect(path) {
+            Ok(stream) => return Ok(stream),
+            Err(err) => {
+                last = AppError::msg(format!("Failed to connect to {}: {err}", path.display()))
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err(last)
 }
 
 fn apply_route_command(
