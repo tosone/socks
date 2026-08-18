@@ -18,7 +18,7 @@ RUN case "${TARGETARCH}" in \
       --release \
       --target "${rust_target}" \
       --no-default-features \
-      --features "server,logging,multi-threaded,aead-cipher,aead-cipher-extra,aead-cipher-2022,aead-cipher-2022-extra,stream-cipher" \
+      --features "server,logging,local-http-rustls,multi-threaded,aead-cipher,aead-cipher-extra,aead-cipher-2022,aead-cipher-2022-extra,stream-cipher" \
       --bin ssserver \
     && cp "target/${rust_target}/release/ssserver" /usr/local/bin/ssserver
 
