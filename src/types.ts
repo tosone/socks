@@ -43,7 +43,6 @@ export type TrafficEvent = {
   downBps: number;
   totalTx: number;
   totalRx: number;
-  samples: SpeedSample[];
 };
 
 export type ConnectivityStatus = "checking" | "connected" | "failed";
@@ -74,9 +73,4 @@ export type SshRunEvent = {
 
 export type SshRunResult = {
   exitStatus: number | null;
-};
-
-export type SpeedSample = {
-  up: number;
-  down: number;
 };

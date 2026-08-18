@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -34,7 +34,6 @@ pub struct TrafficEvent {
     pub down_bps: u64,
     pub total_tx: u64,
     pub total_rx: u64,
-    pub samples: Vec<TrafficSample>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -53,23 +52,11 @@ pub enum ConnectivityStatus {
     Failed,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TrafficSample {
-    pub up: u64,
-    pub down: u64,
-}
-
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrafficTotals {
     pub tx: u64,
     pub rx: u64,
-}
-
-struct StoredTrafficSample {
-    captured_at: Instant,
-    sample: TrafficSample,
 }
 
 struct RuntimeSession {
@@ -345,7 +332,6 @@ fn spawn_traffic_poller(
                 .unwrap_or_else(|| load_traffic_totals(&data_dir, &profile_id).unwrap_or_default());
             (total.tx, total.rx)
         };
-        let mut samples = VecDeque::<StoredTrafficSample>::new();
         let mut last_save = Instant::now();
         let mut ticker = tokio::time::interval(Duration::from_millis(500));
         loop {
@@ -355,10 +341,8 @@ fn spawn_traffic_poller(
             let tx_delta = tx.saturating_sub(last_tx);
             let rx_delta = rx.saturating_sub(last_rx);
             let now = Instant::now();
-            let sample = TrafficSample {
-                up: tx_delta.saturating_mul(2),
-                down: rx_delta.saturating_mul(2),
-            };
+            let up_bps = tx_delta.saturating_mul(2);
+            let down_bps = rx_delta.saturating_mul(2);
             total_tx = total_tx.saturating_add(tx_delta);
             total_rx = total_rx.saturating_add(rx_delta);
             let total = TrafficTotals {
@@ -373,24 +357,14 @@ fn spawn_traffic_poller(
                 let _ = save_traffic_totals(&data_dir, &profile_id, &total);
                 last_save = now;
             }
-            samples.push_back(StoredTrafficSample {
-                captured_at: now,
-                sample,
-            });
-            while samples.front().is_some_and(|sample| {
-                now.duration_since(sample.captured_at) > Duration::from_secs(30 * 60)
-            }) {
-                samples.pop_front();
-            }
             let event = TrafficEvent {
                 profile_id: profile_id.clone(),
                 tx,
                 rx,
-                up_bps: samples.back().map_or(0, |sample| sample.sample.up),
-                down_bps: samples.back().map_or(0, |sample| sample.sample.down),
+                up_bps,
+                down_bps,
                 total_tx,
                 total_rx,
-                samples: samples.iter().map(|sample| sample.sample.clone()).collect(),
             };
             last_tx = tx;
             last_rx = rx;

@@ -24,13 +24,11 @@ import type {
   ConnectivityStatus,
   Profile,
   ProfileInput,
-  SpeedSample,
   TrafficEvent,
 } from "./types";
 
-const TRAFFIC_SAMPLE_INTERVAL_MS = 10_000;
-const MOCK_SAMPLE_LIMIT = (30 * 60 * 1000) / TRAFFIC_SAMPLE_INTERVAL_MS;
-const SHOW_MOCK_PROFILES = true;
+const TRAFFIC_UPDATE_INTERVAL_MS = 10_000;
+const SHOW_MOCK_PROFILES = false;
 const MOCK_PROFILE_ID_PREFIX = "mock-";
 const MOCK_PROFILES: Profile[] = [
   {
@@ -101,18 +99,6 @@ const MOCK_PROFILES: Profile[] = [
   },
 ];
 const INITIAL_SAMPLE_SPEED = { up: 42_300, down: 218_900 };
-const INITIAL_SAMPLE_SPEED_SAMPLES: SpeedSample[] = [
-  { up: 8_200, down: 44_000 },
-  { up: 16_800, down: 92_500 },
-  { up: 11_400, down: 74_200 },
-  { up: 28_100, down: 168_300 },
-  { up: 22_500, down: 137_600 },
-  { up: 35_900, down: 201_200 },
-  { up: 31_200, down: 186_700 },
-  { up: 48_600, down: 252_400 },
-  { up: 39_800, down: 224_900 },
-  { up: INITIAL_SAMPLE_SPEED.up, down: INITIAL_SAMPLE_SPEED.down },
-];
 
 type Page = "profiles" | "ssh";
 
@@ -142,10 +128,6 @@ function initialMockSpeeds() {
   );
 }
 
-function initialMockSamples() {
-  return Object.fromEntries(MOCK_PROFILES.map((profile) => [profile.id, INITIAL_SAMPLE_SPEED_SAMPLES]));
-}
-
 function initialMockTotals() {
   return Object.fromEntries(MOCK_PROFILES.map((profile) => [profile.id, { up: 0, down: 0 }]));
 }
@@ -164,7 +146,6 @@ export default function App() {
   const [mockProfiles, setMockProfiles] = useState<Profile[]>(MOCK_PROFILES);
   const [mockActiveId, setMockActiveId] = useState<string | null>(MOCK_PROFILES[0]?.id ?? null);
   const [mockSpeeds, setMockSpeeds] = useState<Record<string, { up: number; down: number }>>(initialMockSpeeds);
-  const [mockSamples, setMockSamples] = useState<Record<string, SpeedSample[]>>(initialMockSamples);
   const [mockTotals, setMockTotals] = useState<Record<string, { up: number; down: number }>>(initialMockTotals);
   const [mockConnectivity, setMockConnectivity] = useState<Record<string, ConnectivityStatus>>(
     MOCK_PROFILES[0] ? { [MOCK_PROFILES[0].id]: "connected" } : {},
@@ -182,7 +163,6 @@ export default function App() {
   const [helperInstalled, setHelperInstalled] = useState(false);
   const [helperBusy, setHelperBusy] = useState(false);
   const [speeds, setSpeeds] = useState<Record<string, { up: number; down: number }>>({});
-  const [samples, setSamples] = useState<Record<string, SpeedSample[]>>({});
   const [totals, setTotals] = useState<Record<string, { up: number; down: number }>>({});
   const [connectivity, setConnectivity] = useState<Record<string, ConnectivityStatus>>({});
 
@@ -244,14 +224,6 @@ export default function App() {
           }
           next[profile.id] = nextSampleSpeed(current[profile.id] ?? INITIAL_SAMPLE_SPEED);
         }
-        setMockSamples((currentSamples) => {
-          const nextSamples = { ...currentSamples };
-          for (const profile of mockProfiles) {
-            const speed = next[profile.id] ?? { up: 0, down: 0 };
-            nextSamples[profile.id] = [...(currentSamples[profile.id] ?? []), speed].slice(-MOCK_SAMPLE_LIMIT);
-          }
-          return nextSamples;
-        });
         setMockTotals((currentTotals) => {
           const nextTotals = { ...currentTotals };
           for (const profile of mockProfiles) {
@@ -260,15 +232,15 @@ export default function App() {
             }
             const speed = next[profile.id] ?? { up: 0, down: 0 };
             nextTotals[profile.id] = {
-              up: (currentTotals[profile.id]?.up ?? 0) + speed.up * (TRAFFIC_SAMPLE_INTERVAL_MS / 1000),
-              down: (currentTotals[profile.id]?.down ?? 0) + speed.down * (TRAFFIC_SAMPLE_INTERVAL_MS / 1000),
+              up: (currentTotals[profile.id]?.up ?? 0) + speed.up * (TRAFFIC_UPDATE_INTERVAL_MS / 1000),
+              down: (currentTotals[profile.id]?.down ?? 0) + speed.down * (TRAFFIC_UPDATE_INTERVAL_MS / 1000),
             };
           }
           return nextTotals;
         });
         return next;
       });
-    }, TRAFFIC_SAMPLE_INTERVAL_MS);
+    }, TRAFFIC_UPDATE_INTERVAL_MS);
 
     return () => window.clearInterval(timer);
   }, [mockActiveId, mockProfiles]);
@@ -285,9 +257,6 @@ export default function App() {
         ...current,
         [payload.profileId]: { up: payload.totalTx, down: payload.totalRx },
       }));
-      setSamples((current) => {
-        return { ...current, [payload.profileId]: payload.samples };
-      });
     })
       .then((fn) => {
         unlisten = fn;
@@ -362,7 +331,6 @@ export default function App() {
         setActiveId(status.activeProfileId);
         setHelperInstalled(status.helperInstalled);
         setSpeeds((current) => ({ ...current, [profile.id]: { up: 0, down: 0 } }));
-        setSamples((current) => ({ ...current, [profile.id]: [] }));
         setConnectivity((current) => {
           const next = { ...current };
           delete next[profile.id];
@@ -374,7 +342,6 @@ export default function App() {
         setActiveId(status.activeProfileId);
         setHelperInstalled(status.helperInstalled);
         setSpeeds({ [profile.id]: { up: 0, down: 0 } });
-        setSamples({ [profile.id]: [] });
       }
     } catch (err) {
       setConnectivity({ [profile.id]: "failed" });
@@ -570,14 +537,12 @@ export default function App() {
                       downBps={connected ? speed.down : 0}
                       totalUpBytes={total.up}
                       totalDownBytes={total.down}
-                      samples={mockSamples[profile.id] ?? []}
                       connectivityStatus={connected ? mockStatus ?? "checking" : undefined}
                       menuPlacement={index === mockProfiles.length - 1 ? "up" : "down"}
                       onToggle={() => {
                         setMockActiveId((current) => {
                           if (current === profile.id) {
                             setMockSpeeds((speeds) => ({ ...speeds, [profile.id]: { up: 0, down: 0 } }));
-                            setMockSamples((samples) => ({ ...samples, [profile.id]: [] }));
                             setMockConnectivity((statuses) => {
                               const next = { ...statuses };
                               delete next[profile.id];
@@ -588,11 +553,6 @@ export default function App() {
                           setMockSpeeds((speeds) => ({
                             ...speeds,
                             ...(current ? { [current]: { up: 0, down: 0 } } : {}),
-                          }));
-                          setMockSamples((samples) => ({
-                            ...samples,
-                            ...(current ? { [current]: [] } : {}),
-                            [profile.id]: [],
                           }));
                           setMockConnectivity({
                             [profile.id]: "checking",
@@ -637,7 +597,6 @@ export default function App() {
                   downBps={connected ? speed.down : 0}
                   totalUpBytes={total.up}
                   totalDownBytes={total.down}
-                  samples={samples[profile.id] ?? []}
                   connectivityStatus={
                     connected || busyId === profile.id
                       ? connectivity[profile.id] ?? "checking"

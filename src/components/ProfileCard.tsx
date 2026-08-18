@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { CircleAlert, CircleCheck, LoaderCircle, MoreHorizontal } from "lucide-react";
-import type { ConnectivityStatus, Profile, SpeedSample } from "../types";
-import { Sparkline } from "./Sparkline";
+import type { ConnectivityStatus, Profile } from "../types";
 
 type ProfileCardProps = {
   profile: Profile;
@@ -11,7 +10,6 @@ type ProfileCardProps = {
   downBps: number;
   totalUpBytes: number;
   totalDownBytes: number;
-  samples: SpeedSample[];
   connectivityStatus?: ConnectivityStatus;
   menuPlacement?: "down" | "up";
   onToggle: () => void;
@@ -27,7 +25,6 @@ export function ProfileCard({
   downBps,
   totalUpBytes,
   totalDownBytes,
-  samples,
   connectivityStatus,
   menuPlacement = "down",
   onToggle,
@@ -50,12 +47,6 @@ export function ProfileCard({
 
   return (
     <article className="relative flex min-h-40 rounded-2xl border border-zinc-200 bg-white px-4 py-5 shadow-sm">
-      <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-2xl">
-        <Sparkline
-          samples={connected ? samples : []}
-          padding={{ top: 28, right: 40, bottom: 24, left: 118 }}
-        />
-      </div>
       <div className="relative z-10 flex flex-1 flex-col justify-between gap-4">
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
