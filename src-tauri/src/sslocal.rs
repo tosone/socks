@@ -34,6 +34,7 @@ pub fn build_server_config(
     outbound_bind_interface: Option<String>,
     bundled_plugin_dir: Option<&Path>,
     tun_fd_path: Option<&Path>,
+    local_dns_ip: IpAddr,
 ) -> AppResult<Config> {
     let method = CipherKind::from_str(&profile.method)
         .map_err(|_| AppError::msg(format!("Unknown encryption method: {}", profile.method)))?;
@@ -85,7 +86,7 @@ pub fn build_server_config(
     )));
     dns.mode = Mode::TcpAndUdp;
     dns.local_dns_addr = Some(NameServerAddr::SocketAddr(SocketAddr::new(
-        IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+        local_dns_ip,
         REMOTE_DNS_PORT,
     )));
     dns.remote_dns_addr = Some(Address::from(SocketAddr::new(

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -212,6 +213,7 @@ impl AppState {
 
         let snapshot = macos_route::current_default_route()?;
         let server_ip = sslocal::resolve_server_ip(&profile.server, profile.port).await?;
+        let local_dns_ip = local_dns_ip(&snapshot)?;
         let bundled_plugin_dir = self
             .app
             .path()
@@ -231,6 +233,7 @@ impl AppState {
             Some(snapshot.interface.clone()),
             bundled_plugin_dir.as_deref(),
             Some(&tun_fd_path),
+            local_dns_ip,
         )?;
         let runtime =
             match tokio::time::timeout(Duration::from_secs(10), sslocal::start_local(config)).await
@@ -436,17 +439,37 @@ async fn check_dns_google() -> AppResult<()> {
         .build()
         .map_err(|err| AppError::msg(format!("Failed to create HTTP client: {err}")))?;
     let response = client
-        .get("https://dns.google")
+        .get("https://8.8.8.8")
+        .header(reqwest::header::HOST, "dns.google")
         .send()
         .await
-        .map_err(|err| AppError::msg(format!("Failed to reach https://dns.google: {err}")))?;
+        .map_err(|err| AppError::msg(format!("Failed to reach https://8.8.8.8: {err}")))?;
     if !response.status().is_success() {
         return Err(AppError::msg(format!(
-            "https://dns.google returned HTTP {}",
+            "https://8.8.8.8 returned HTTP {}",
             response.status()
         )));
     }
+    tokio::net::lookup_host(("dns.google", 443))
+        .await
+        .map_err(|err| AppError::msg(format!("Failed to resolve dns.google: {err}")))?
+        .next()
+        .ok_or_else(|| AppError::msg("dns.google resolved to no addresses"))?;
     Ok(())
+}
+
+fn local_dns_ip(snapshot: &macos_route::RouteSnapshot) -> AppResult<IpAddr> {
+    if let Some(ip) = snapshot.dns.as_ref().and_then(|dns| {
+        dns.servers
+            .iter()
+            .find_map(|server| server.parse::<IpAddr>().ok())
+    }) {
+        return Ok(ip);
+    }
+    snapshot
+        .gateway
+        .parse::<IpAddr>()
+        .map_err(|err| AppError::msg(format!("Failed to choose local DNS server: {err}")))
 }
 
 fn traffic_dir(data_dir: &Path) -> PathBuf {
