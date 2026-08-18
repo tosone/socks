@@ -9,7 +9,6 @@ use shadowsocks_service::config::{
 };
 use shadowsocks_service::local::dns::NameServerAddr;
 use shadowsocks_service::local::Server;
-use shadowsocks_service::net::FlowStat;
 use shadowsocks_service::shadowsocks::config::{Mode, ServerAddr, ServerConfig};
 use shadowsocks_service::shadowsocks::crypto::CipherKind;
 use shadowsocks_service::shadowsocks::plugin::PluginConfig;
@@ -26,15 +25,14 @@ const ACL_PATH: &str = ".config/socks/shadowsocks.acl";
 
 pub struct LocalRuntime {
     pub server: Server,
-    pub flow_stat: std::sync::Arc<FlowStat>,
 }
 
 pub fn build_server_config(
     profile: &Profile,
     outbound_bind_interface: Option<String>,
     bundled_plugin_dir: Option<&Path>,
-    tun_fd_path: Option<&Path>,
     local_dns_ip: IpAddr,
+    acl_path: Option<&Path>,
 ) -> AppResult<Config> {
     let method = CipherKind::from_str(&profile.method)
         .map_err(|_| AppError::msg(format!("Unknown encryption method: {}", profile.method)))?;
@@ -84,12 +82,6 @@ pub fn build_server_config(
             .parse::<IpNet>()
             .map_err(|err| AppError::msg(format!("Invalid TUN address: {err}")))?,
     );
-    #[cfg(unix)]
-    if let Some(path) = tun_fd_path {
-        eprintln!("[socks] build sslocal tun fd path={}", path.display());
-        local.tun_device_fd_from_path = Some(path.to_path_buf());
-    }
-
     let mut config = Config::new(ConfigType::Local);
     config
         .local
@@ -123,7 +115,9 @@ pub fn build_server_config(
 
     config.server.push(instance);
     config.outbound_bind_interface = outbound_bind_interface;
-    if let Some(acl_path) = user_acl_path() {
+    let acl_path = acl_path.map(Path::to_path_buf).or_else(default_acl_path);
+    if let Some(acl_path) = acl_path {
+        eprintln!("[socks] build sslocal acl path={}", acl_path.display());
         config.acl = Some(AccessControl::load_from_file(&acl_path).map_err(|err| {
             AppError::msg(format!("Failed to load ACL {}: {err}", acl_path.display()))
         })?);
@@ -131,7 +125,7 @@ pub fn build_server_config(
     Ok(config)
 }
 
-fn user_acl_path() -> Option<PathBuf> {
+pub fn default_acl_path() -> Option<PathBuf> {
     let path = std::env::var_os("HOME")
         .map(PathBuf::from)
         .map(|home| home.join(ACL_PATH))?;
@@ -163,8 +157,7 @@ pub async fn start_local(config: Config) -> AppResult<LocalRuntime> {
         }
         AppError::msg(format!("Failed to start sslocal: {message}"))
     })?;
-    let flow_stat = server.server_balancer().context().flow_stat();
-    Ok(LocalRuntime { server, flow_stat })
+    Ok(LocalRuntime { server })
 }
 
 pub async fn resolve_server_ip(host: &str, port: u16) -> AppResult<String> {

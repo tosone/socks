@@ -5,7 +5,6 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
-use crate::helper;
 use crate::sslocal::TUN_ADDRESS;
 
 const TUN_IPV4: &str = "10.255.0.1";
@@ -21,13 +20,6 @@ pub struct RouteSnapshot {
 pub struct DnsSnapshot {
     pub service: String,
     pub servers: Vec<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct AppliedRoutes {
-    pub tun_name: String,
-    pub server_ip: String,
-    pub dns: Option<DnsSnapshot>,
 }
 
 pub fn current_default_route() -> AppResult<RouteSnapshot> {
@@ -119,34 +111,6 @@ pub async fn wait_for_tun_name(timeout: Duration) -> AppResult<String> {
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-}
-
-pub fn apply_global_routes(
-    snapshot: &RouteSnapshot,
-    tun_name: &str,
-    server_ip: &str,
-) -> AppResult<AppliedRoutes> {
-    helper::apply_routes(tun_name, server_ip, &snapshot.gateway)?;
-    if let Some(dns) = snapshot.dns.as_ref() {
-        if let Err(err) = helper::apply_dns(&dns.service) {
-            let _ = helper::delete_routes(tun_name, server_ip);
-            return Err(err);
-        }
-    }
-    Ok(AppliedRoutes {
-        tun_name: tun_name.to_string(),
-        server_ip: server_ip.to_string(),
-        dns: snapshot.dns.clone(),
-    })
-}
-
-pub fn restore_routes(applied: &AppliedRoutes) -> AppResult<()> {
-    // Best-effort: still try even if some routes were already removed.
-    if let Some(dns) = applied.dns.as_ref() {
-        let _ = helper::restore_dns(&dns.service, &dns.servers);
-    }
-    let _ = helper::delete_routes(&applied.tun_name, &applied.server_ip);
-    Ok(())
 }
 
 fn current_dns_snapshot(interface: &str) -> AppResult<DnsSnapshot> {

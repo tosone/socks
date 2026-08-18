@@ -3,17 +3,16 @@ use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use shadowsocks_service::net::FlowStat;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use crate::error::{AppError, AppResult};
 use crate::helper::{self, HelperStatus};
-use crate::macos_route::{self, AppliedRoutes};
+use crate::macos_route;
 use crate::profile::{self, Profile, ProfileInput};
 use crate::sslocal;
 
@@ -23,18 +22,6 @@ pub struct RuntimeStatus {
     pub active_profile_id: Option<String>,
     pub tun_name: Option<String>,
     pub helper_installed: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TrafficEvent {
-    pub profile_id: String,
-    pub tx: u64,
-    pub rx: u64,
-    pub up_bps: u64,
-    pub down_bps: u64,
-    pub total_tx: u64,
-    pub total_rx: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -63,16 +50,7 @@ pub struct TrafficTotals {
 struct RuntimeSession {
     profile_id: String,
     tun_name: String,
-    routes: Option<AppliedRoutes>,
-    server_task: JoinHandle<()>,
-    poller_task: JoinHandle<()>,
     connectivity_task: JoinHandle<()>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RuntimeState {
-    routes: AppliedRoutes,
 }
 
 pub struct AppState {
@@ -95,10 +73,6 @@ impl AppState {
                 )
             })
             .collect();
-        if helper::helper_status().installed {
-            let _ = recover_runtime_state(&data_dir);
-        }
-
         Ok(Self {
             data_dir,
             app,
@@ -200,7 +174,6 @@ impl AppState {
             ));
         }
         self.disconnect().await?;
-        recover_runtime_state(&self.data_dir)?;
 
         let profile = {
             let profiles = self.profiles.lock().await;
@@ -243,94 +216,24 @@ impl AppState {
             .resource_dir()
             .ok()
             .map(|path| path.join("plugins"));
-        let tun_fd_path = self.data_dir.join("tun-fd.sock");
-        let _ = fs::remove_file(&tun_fd_path);
-        eprintln!(
-            "[socks] tun fd path={} tun_address={}",
-            tun_fd_path.display(),
-            sslocal::TUN_ADDRESS
-        );
-        let tun_fd_task = {
-            let tun_fd_path = tun_fd_path.clone();
-            tokio::task::spawn_blocking(move || {
-                helper::provide_tun_fd(&tun_fd_path, sslocal::TUN_ADDRESS)
-            })
-        };
-        let config = sslocal::build_server_config(
-            &profile,
-            Some(snapshot.interface.clone()),
-            bundled_plugin_dir.as_deref(),
-            Some(&tun_fd_path),
+        let acl_path = sslocal::default_acl_path();
+        let tun_name = helper::start_runtime(helper::StartRuntimeInput {
+            profile: profile.clone(),
+            outbound_interface: snapshot.interface.clone(),
+            server_ip,
+            gateway: snapshot.gateway.clone(),
+            dns: snapshot.dns.clone(),
             local_dns_ip,
-        )?;
-        let runtime =
-            match tokio::time::timeout(Duration::from_secs(10), sslocal::start_local(config)).await
-            {
-                Ok(Ok(runtime)) => runtime,
-                Ok(Err(err)) => {
-                    let _ = tun_fd_task.await;
-                    return Err(err);
-                }
-                Err(_) => {
-                    let helper_result = tun_fd_task
-                        .await
-                        .map_err(|err| AppError::msg(format!("TUN helper task failed: {err}")))?;
-                    return Err(helper_result.err().unwrap_or_else(|| {
-                        AppError::msg("Timed out waiting for TUN file descriptor")
-                    }));
-                }
-            };
-        tun_fd_task
-            .await
-            .map_err(|err| AppError::msg(format!("TUN helper task failed: {err}")))??;
-        eprintln!("[socks] sslocal Server::new succeeded; starting runtime loop");
-        let flow_stat = runtime.flow_stat.clone();
-
-        let task_profile_id = profile.id.clone();
-        let server_task = tokio::spawn(async move {
-            if let Err(err) = runtime.server.run().await {
-                eprintln!("[socks] sslocal stopped profile_id={task_profile_id}: {err:?}");
-            }
-        });
-
-        let tun_name = match macos_route::wait_for_tun_name(Duration::from_secs(8)).await {
-            Ok(name) => name,
-            Err(err) => {
-                server_task.abort();
-                return Err(err);
-            }
-        };
-
-        let routes = match macos_route::apply_global_routes(&snapshot, &tun_name, &server_ip) {
-            Ok(routes) => routes,
-            Err(err) => {
-                server_task.abort();
-                return Err(err);
-            }
-        };
-        save_runtime_state(
-            &self.data_dir,
-            &RuntimeState {
-                routes: routes.clone(),
-            },
-        )?;
-
-        let poller_task = spawn_traffic_poller(
-            self.app.clone(),
-            profile.id.clone(),
-            flow_stat,
-            self.data_dir.clone(),
-            self.traffic_totals.clone(),
-        );
+            bundled_plugin_dir,
+            acl_path,
+        })?;
+        eprintln!("[socks] helper runtime started tun={tun_name}");
         let connectivity_task = spawn_connectivity_check(self.app.clone(), profile.id.clone());
 
         let mut session = self.session.lock().await;
         *session = Some(RuntimeSession {
             profile_id: profile.id,
             tun_name,
-            routes: Some(routes),
-            server_task,
-            poller_task,
             connectivity_task,
         });
         drop(session);
@@ -340,13 +243,8 @@ impl AppState {
     pub async fn disconnect(&self) -> AppResult<RuntimeStatus> {
         let mut session = self.session.lock().await;
         if let Some(current) = session.take() {
-            current.poller_task.abort();
             current.connectivity_task.abort();
-            current.server_task.abort();
-            if let Some(routes) = current.routes {
-                macos_route::restore_routes(&routes)?;
-            }
-            remove_runtime_state(&self.data_dir)?;
+            helper::stop_runtime()?;
             if let Some(total) = self
                 .traffic_totals
                 .lock()
@@ -372,66 +270,6 @@ impl AppState {
             .as_ref()
             .map(|s| s.profile_id.clone())
     }
-}
-
-fn spawn_traffic_poller(
-    app: AppHandle,
-    profile_id: String,
-    flow_stat: Arc<FlowStat>,
-    data_dir: PathBuf,
-    traffic_totals: Arc<Mutex<HashMap<String, TrafficTotals>>>,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut last_tx = flow_stat.tx();
-        let mut last_rx = flow_stat.rx();
-        let (mut total_tx, mut total_rx) = {
-            let total = traffic_totals
-                .lock()
-                .await
-                .get(&profile_id)
-                .cloned()
-                .unwrap_or_else(|| load_traffic_totals(&data_dir, &profile_id).unwrap_or_default());
-            (total.tx, total.rx)
-        };
-        let mut last_save = Instant::now();
-        let mut ticker = tokio::time::interval(Duration::from_millis(500));
-        loop {
-            ticker.tick().await;
-            let tx = flow_stat.tx();
-            let rx = flow_stat.rx();
-            let tx_delta = tx.saturating_sub(last_tx);
-            let rx_delta = rx.saturating_sub(last_rx);
-            let now = Instant::now();
-            let up_bps = tx_delta.saturating_mul(2);
-            let down_bps = rx_delta.saturating_mul(2);
-            total_tx = total_tx.saturating_add(tx_delta);
-            total_rx = total_rx.saturating_add(rx_delta);
-            let total = TrafficTotals {
-                tx: total_tx,
-                rx: total_rx,
-            };
-            traffic_totals
-                .lock()
-                .await
-                .insert(profile_id.clone(), total.clone());
-            if now.duration_since(last_save) >= Duration::from_secs(10) {
-                let _ = save_traffic_totals(&data_dir, &profile_id, &total);
-                last_save = now;
-            }
-            let event = TrafficEvent {
-                profile_id: profile_id.clone(),
-                tx,
-                rx,
-                up_bps,
-                down_bps,
-                total_tx,
-                total_rx,
-            };
-            last_tx = tx;
-            last_rx = rx;
-            let _ = app.emit("traffic", event);
-        }
-    })
 }
 
 fn spawn_connectivity_check(app: AppHandle, profile_id: String) -> JoinHandle<()> {
@@ -534,45 +372,5 @@ fn remove_traffic_totals(data_dir: &Path, profile_id: &str) -> AppResult<()> {
     if path.exists() {
         fs::remove_file(path)?;
     }
-    Ok(())
-}
-
-fn runtime_state_path(data_dir: &Path) -> PathBuf {
-    data_dir.join("runtime-state.json")
-}
-
-fn load_runtime_state(data_dir: &Path) -> AppResult<Option<RuntimeState>> {
-    let path = runtime_state_path(data_dir);
-    if !path.exists() {
-        return Ok(None);
-    }
-    let raw = fs::read_to_string(path)?;
-    if raw.trim().is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(serde_json::from_str(&raw)?))
-}
-
-fn save_runtime_state(data_dir: &Path, state: &RuntimeState) -> AppResult<()> {
-    fs::create_dir_all(data_dir)?;
-    let raw = serde_json::to_string_pretty(state)?;
-    fs::write(runtime_state_path(data_dir), raw)?;
-    Ok(())
-}
-
-fn remove_runtime_state(data_dir: &Path) -> AppResult<()> {
-    let path = runtime_state_path(data_dir);
-    if path.exists() {
-        fs::remove_file(path)?;
-    }
-    Ok(())
-}
-
-fn recover_runtime_state(data_dir: &Path) -> AppResult<()> {
-    let Some(state) = load_runtime_state(data_dir)? else {
-        return Ok(());
-    };
-    macos_route::restore_routes(&state.routes)?;
-    remove_runtime_state(data_dir)?;
     Ok(())
 }
