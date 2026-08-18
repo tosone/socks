@@ -98,6 +98,8 @@ if [ -n "${SS_DOMAIN:-}" ]; then
       -keyout "$tls_key" \
       -out "$tls_cert" >/dev/null 2>&1
   fi
+  chmod 0755 "$tls_dir"
+  chmod 0644 "$tls_cert" "$tls_key"
   plugin_config=",\"plugin\":\"v2ray-plugin\",\"plugin_opts\":\"server;tls;host=${SS_DOMAIN};cert=${tls_cert};key=${tls_key}\",\"plugin_mode\":\"tcp_only\""
 fi
 
