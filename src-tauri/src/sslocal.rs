@@ -20,7 +20,7 @@ use crate::password;
 use crate::profile::Profile;
 
 pub const TUN_ADDRESS: &str = "10.255.0.1/24";
-pub const DNS_RELAY_PORT: u16 = 5353;
+pub const DNS_RELAY_PORT: u16 = 15353;
 pub const REMOTE_DNS_PORT: u16 = 53;
 const ACL_PATH: &str = ".config/socks/shadowsocks.acl";
 

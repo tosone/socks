@@ -37,6 +37,7 @@ pub enum SshAuthMode {
 #[serde(rename_all = "camelCase")]
 pub struct SshRunResult {
     pub exit_status: Option<u32>,
+    pub plugin_cert_raw: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -143,7 +144,7 @@ impl Session {
         Ok(Self { session })
     }
 
-    async fn call(&mut self, command: &str, app: &AppHandle) -> AppResult<Option<u32>> {
+    async fn call(&mut self, command: &str, app: &AppHandle) -> AppResult<(Option<u32>, String)> {
         let mut channel = self
             .session
             .channel_open_session()
@@ -159,10 +160,13 @@ impl Session {
             .map_err(|err| AppError::msg(format!("Failed to execute SSH command: {err}")))?;
 
         let mut exit_status = None;
+        let mut stdout = String::new();
         while let Some(msg) = channel.wait().await {
             match msg {
                 ChannelMsg::Data { data } => {
-                    emit_log(app, SshLogStream::Stdout, String::from_utf8_lossy(&data));
+                    let text = String::from_utf8_lossy(&data);
+                    stdout.push_str(&text);
+                    emit_log(app, SshLogStream::Stdout, text);
                 }
                 ChannelMsg::ExtendedData { data, .. } => {
                     emit_log(app, SshLogStream::Stderr, String::from_utf8_lossy(&data));
@@ -185,7 +189,7 @@ impl Session {
                 _ => {}
             }
         }
-        Ok(exit_status)
+        Ok((exit_status, stdout))
     }
 
     async fn close(&mut self) {
@@ -224,9 +228,12 @@ pub async fn run_sample(app: AppHandle, input: SshRunInput) -> AppResult<SshRunR
         SshLogStream::System,
         format!("\x1b[32mConnected\x1b[0m. Running installer.\n$ {command}\n"),
     );
-    let exit_status = session.call(&command, &app).await?;
+    let (exit_status, stdout) = session.call(&command, &app).await?;
     session.close().await;
-    Ok(SshRunResult { exit_status })
+    Ok(SshRunResult {
+        exit_status,
+        plugin_cert_raw: parse_plugin_cert_raw(&stdout),
+    })
 }
 
 async fn run_local_sample(app: &AppHandle) -> AppResult<SshRunResult> {
@@ -247,6 +254,7 @@ async fn run_local_sample(app: &AppHandle) -> AppResult<SshRunResult> {
     }
     Ok(SshRunResult {
         exit_status: Some(0),
+        plugin_cert_raw: None,
     })
 }
 
@@ -258,6 +266,9 @@ fn install_command(input: &SshRunInput) -> AppResult<String> {
         .filter(|domain| !domain.is_empty());
     let plugin_domain_env = plugin_domain.map_or_else(String::new, |domain| {
         format!(" -e SS_DOMAIN={}", shell_quote(domain))
+    });
+    let plugin_cert_command = plugin_domain.map_or_else(String::new, |_| {
+        "\nprintf 'SOCKS_PLUGIN_CERT_RAW='\nsudo docker exec socks-server sh -c \"sed -n '/BEGIN CERTIFICATE/,/END CERTIFICATE/p' /etc/socks/tls/tls.crt | sed '/BEGIN CERTIFICATE/d;/END CERTIFICATE/d' | tr -d '\\n'\"\nprintf '\\n'\n".to_string()
     });
     let password = password::normalize_for_method(input.method.trim(), &input.service_password)?;
     let password = shell_quote(&password);
@@ -271,8 +282,17 @@ fi
 sudo docker pull ghcr.io/tosone/socks:latest
 sudo docker rm -f socks-server >/dev/null 2>&1 || true
 sudo docker run -d --name socks-server --restart unless-stopped -p 443:443/tcp -e SS_PASSWORD={password} -e SS_METHOD={method}{plugin_domain_env} ghcr.io/tosone/socks:latest
-sudo docker ps --filter name=socks-server"#
+sudo docker ps --filter name=socks-server{plugin_cert_command}"#
     ))
+}
+
+fn parse_plugin_cert_raw(stdout: &str) -> Option<String> {
+    stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("SOCKS_PLUGIN_CERT_RAW="))
+        .map(str::trim)
+        .filter(|cert| !cert.is_empty())
+        .map(str::to_string)
 }
 
 fn shell_quote(value: &str) -> String {

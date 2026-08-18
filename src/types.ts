@@ -74,4 +74,5 @@ export type SshRunEvent = {
 
 export type SshRunResult = {
   exitStatus: number | null;
+  pluginCertRaw?: string | null;
 };

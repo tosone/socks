@@ -87,7 +87,18 @@ ss_method="${SS_METHOD:-2022-blake3-chacha20-poly1305}"
 ss_password="$(normalize_ss_password "$ss_method" "${SS_PASSWORD:-change-me}")"
 plugin_config=""
 if [ -n "${SS_DOMAIN:-}" ]; then
-  plugin_config=",\"plugin\":\"v2ray-plugin\",\"plugin_opts\":\"server;tls;host=${SS_DOMAIN}\",\"plugin_mode\":\"tcp_only\""
+  tls_dir="${SS_TLS_DIR:-/etc/socks/tls}"
+  tls_cert="${SS_TLS_CERT:-$tls_dir/tls.crt}"
+  tls_key="${SS_TLS_KEY:-$tls_dir/tls.key}"
+  if [ ! -s "$tls_cert" ] || [ ! -s "$tls_key" ]; then
+    mkdir -p "$tls_dir"
+    openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3650 \
+      -subj "/CN=${SS_DOMAIN}" \
+      -addext "subjectAltName=DNS:${SS_DOMAIN}" \
+      -keyout "$tls_key" \
+      -out "$tls_cert" >/dev/null 2>&1
+  fi
+  plugin_config=",\"plugin\":\"v2ray-plugin\",\"plugin_opts\":\"server;tls;host=${SS_DOMAIN};cert=${tls_cert};key=${tls_key}\",\"plugin_mode\":\"tcp_only\""
 fi
 
 cat > /etc/shadowsocks-rust/config.json <<EOF_CONFIG
@@ -104,7 +115,7 @@ EXPOSE 443/tcp
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["ssserver", "--log-without-time", "-a", "nobody", "-c", "/etc/shadowsocks-rust/config.json"]
 
-# sslocal -b 127.0.0.1:1080 -s example.com:443 -m "$SS_METHOD" -k "$SS_PASSWORD" --plugin v2ray-plugin --plugin-opts "tls;host=example.com"
+# sslocal -b 127.0.0.1:1080 -s example.com:443 -m "$SS_METHOD" -k "$SS_PASSWORD" --plugin v2ray-plugin --plugin-opts "tls;host=example.com;certRaw=..."
 # docker buildx build --platform linux/amd64,linux/arm64 -f build/Dockerfile -t socks-server:latest .
 # docker run --rm -e SS_PASSWORD=change-me -e SS_METHOD=2022-blake3-chacha20-poly1305 -p 443:443/tcp socks-server:latest
 # docker run --rm -e SS_DOMAIN=example.com -e SS_PASSWORD=change-me -e SS_METHOD=2022-blake3-chacha20-poly1305 -p 443:443/tcp socks-server:latest

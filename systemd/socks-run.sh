@@ -171,7 +171,11 @@ start_sslocal() {
       exit 1
     fi
     args+=(--plugin "$SS_PLUGIN")
-    args+=(--plugin-opts "tls;host=$SS_PLUGIN_DOMAIN")
+    if [[ -n "${SS_PLUGIN_CERT_RAW:-}" ]]; then
+      args+=(--plugin-opts "tls;host=$SS_PLUGIN_DOMAIN;certRaw=$SS_PLUGIN_CERT_RAW")
+    else
+      args+=(--plugin-opts "tls;host=$SS_PLUGIN_DOMAIN")
+    fi
   fi
 
   "$SSLOCAL_BIN" "${args[@]}" &

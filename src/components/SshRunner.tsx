@@ -190,7 +190,7 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
         pluginDomain: pluginDomain.trim() || null,
       });
       if (result.exitStatus === 0) {
-        setInstalledProfile(buildProfileInput());
+        setInstalledProfile(buildProfileInput(result.pluginCertRaw ?? null));
       }
     } catch (err) {
       pushLocalLog("stderr", `\x1b[31m${String(err)}\x1b[0m\n`);
@@ -216,9 +216,14 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
     }
   }
 
-  function buildProfileInput(): ProfileInput {
+  function buildProfileInput(pluginCertRaw: string | null): ProfileInput {
     const server = host.trim();
     const domain = pluginDomain.trim();
+    const pluginOpts = domain
+      ? pluginCertRaw
+        ? `tls;host=${domain};certRaw=${pluginCertRaw}`
+        : `tls;host=${domain}`
+      : null;
     return {
       name: server.slice(0, 10) || "server",
       server,
@@ -226,7 +231,7 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
       password: servicePassword,
       method,
       plugin: domain ? "v2ray-plugin" : null,
-      pluginOpts: domain ? `tls;host=${domain}` : null,
+      pluginOpts,
     };
   }
 
