@@ -3,6 +3,9 @@ import { CircleAlert, CircleCheck, LoaderCircle, MoreHorizontal } from "lucide-r
 import type { ConnectivityStatus, Profile, SpeedSample } from "../types";
 import { Sparkline } from "./Sparkline";
 
+const menuItemClass = "block w-full cursor-pointer px-3 py-1.5 text-left text-sm";
+const disabledMenuItemClass = "disabled:cursor-not-allowed disabled:opacity-60";
+
 type ProfileCardProps = {
   profile: Profile;
   connected: boolean;
@@ -99,7 +102,7 @@ export function ProfileCard({
                 >
                   <button
                     type="button"
-                    className={`block w-full cursor-pointer px-3 py-1.5 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60 ${connected ? "text-amber-700 hover:bg-amber-50" : "text-emerald-700 hover:bg-emerald-50"
+                    className={`${menuItemClass} ${disabledMenuItemClass} ${connected ? "text-amber-700 hover:bg-amber-50" : "text-emerald-700 hover:bg-emerald-50"
                       }`}
                     onClick={() => {
                       setMenuOpen(false);
@@ -111,7 +114,7 @@ export function ProfileCard({
                   </button>
                   <button
                     type="button"
-                    className="block w-full cursor-pointer px-3 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-50"
+                    className={`${menuItemClass} text-zinc-700 hover:bg-zinc-50`}
                     onClick={() => {
                       setMenuOpen(false);
                       onEdit();
@@ -121,7 +124,7 @@ export function ProfileCard({
                   </button>
                   <button
                     type="button"
-                    className="block w-full cursor-pointer px-3 py-1.5 text-left text-sm text-red-600 hover:bg-red-50"
+                    className={`${menuItemClass} text-red-600 hover:bg-red-50`}
                     onClick={() => {
                       setMenuOpen(false);
                       onDelete();

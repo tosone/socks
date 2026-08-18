@@ -116,6 +116,13 @@ const INITIAL_SAMPLE_SPEED_SAMPLES: SpeedSample[] = [
 
 type Page = "profiles" | "ssh";
 
+const headerInnerClass = "mx-auto flex max-w-3xl items-center justify-between px-4 py-3";
+const iconButtonClass =
+  "inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg bg-zinc-900 text-white hover:bg-zinc-800";
+const pageBaseClass =
+  "inset-x-0 top-0 mx-auto flex max-w-3xl flex-col transition duration-700 [backface-visibility:hidden] [transform-style:preserve-3d]";
+const helperButtonClass = "rounded-lg px-3 py-1.5 text-xs disabled:opacity-60";
+
 function nextSampleSpeed(current: { up: number; down: number }) {
   const up = Math.round(clamp(current.up * randomBetween(0.65, 1.45), 12_000, 76_000));
   const down = Math.round(clamp(current.down * randomBetween(0.7, 1.35), 80_000, 360_000));
@@ -347,6 +354,12 @@ export default function App() {
     }
   }
 
+  async function handleAddInstalledProfile(input: ProfileInput) {
+    await createProfile(input);
+    await refresh();
+    setPage("profiles");
+  }
+
   async function handleToggle(profile: Profile) {
     setBusyId(profile.id);
     setErrorDialog(null);
@@ -458,9 +471,9 @@ export default function App() {
     <div className="min-h-screen bg-zinc-50 text-zinc-900">
       <header className="fixed inset-x-0 top-0 z-20 border-b border-zinc-200 bg-white/90 backdrop-blur">
         <div
-          className="mx-auto flex max-w-3xl items-center justify-between px-4 py-3"
-          onDoubleClick={togglePage}
-          title="Double-click to switch page"
+          className={headerInnerClass}
+          onClick={togglePage}
+          title="Click to switch page"
         >
           <div className="min-w-0">
             <p className="select-none text-sm font-medium text-zinc-600">
@@ -470,9 +483,11 @@ export default function App() {
           {page === "profiles" ? (
             <button
               type="button"
-              className="inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg bg-zinc-900 text-white hover:bg-zinc-800"
-              onClick={openCreateForm}
-              onDoubleClick={(event) => event.stopPropagation()}
+              className={iconButtonClass}
+              onClick={(event) => {
+                event.stopPropagation();
+                openCreateForm();
+              }}
               aria-label="Add profile"
             >
               <Plus size={18} />
@@ -487,7 +502,7 @@ export default function App() {
         className={`relative [perspective:1600px] ${page === "ssh" ? "h-screen overflow-hidden" : "min-h-screen"}`}
       >
         <main
-          className={`${page === "profiles" ? "relative" : "absolute h-screen overflow-hidden"} inset-x-0 top-0 mx-auto flex max-w-3xl flex-col gap-4 px-4 pb-4 pt-[77px] transition duration-700 [backface-visibility:hidden] [transform-style:preserve-3d] ${page === "profiles"
+          className={`${page === "profiles" ? "relative" : "absolute h-screen overflow-hidden"} ${pageBaseClass} gap-4 px-4 pb-4 pt-[77px] ${page === "profiles"
             ? "pointer-events-auto opacity-100 [transform:rotateY(0deg)]"
             : "pointer-events-none opacity-0 [transform:rotateY(180deg)]"
             }`}
@@ -512,7 +527,7 @@ export default function App() {
               {helperInstalled ? (
                 <button
                   type="button"
-                  className="rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs text-emerald-800 hover:bg-emerald-100 disabled:opacity-60"
+                  className={`${helperButtonClass} border border-emerald-300 bg-white text-emerald-800 hover:bg-emerald-100`}
                   onClick={handleUninstallHelper}
                   disabled={helperBusy}
                 >
@@ -521,7 +536,7 @@ export default function App() {
               ) : (
                 <button
                   type="button"
-                  className="rounded-lg bg-zinc-900 px-3 py-1.5 text-xs text-white hover:bg-zinc-800 disabled:opacity-60"
+                  className={`${helperButtonClass} bg-zinc-900 text-white hover:bg-zinc-800`}
                   onClick={handleInstallHelper}
                   disabled={helperBusy}
                 >
@@ -651,12 +666,12 @@ export default function App() {
         </main>
 
         <main
-          className={`${page === "ssh" ? "relative" : "absolute"} inset-x-0 top-0 mx-auto flex h-screen max-w-3xl flex-col px-4 pb-4 pt-[77px] transition duration-700 [backface-visibility:hidden] [transform-style:preserve-3d] ${page === "ssh"
+          className={`${page === "ssh" ? "relative" : "absolute"} ${pageBaseClass} h-screen overflow-y-auto px-4 pb-6 pt-[77px] ${page === "ssh"
             ? "pointer-events-auto opacity-100 [transform:rotateY(0deg)]"
             : "pointer-events-none opacity-0 [transform:rotateY(-180deg)]"
             }`}
         >
-          <SshRunner />
+          <SshRunner ciphers={ciphers} onAddProfile={handleAddInstalledProfile} />
         </main>
       </div>
 

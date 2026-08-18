@@ -4,6 +4,12 @@ import { Check, ChevronDown, Eye, EyeOff } from "lucide-react";
 import type { Profile, ProfileInput } from "../types";
 
 const MAX_PROFILE_NAME_CHARS = 10;
+const overlayClass = "fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4";
+const formClass = "max-h-[90vh] w-full max-w-sm overflow-y-auto rounded-2xl bg-white p-5 shadow-xl";
+const secondaryButtonClass =
+  "cursor-pointer rounded-lg border border-zinc-200 px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-50";
+const primaryButtonClass =
+  "cursor-pointer rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60";
 
 type ProfileFormProps = {
   title: string;
@@ -80,11 +86,8 @@ export function ProfileForm({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <form
-        className="max-h-[90vh] w-full max-w-sm overflow-y-auto rounded-2xl bg-white p-5 shadow-xl"
-        onSubmit={handleSubmit}
-      >
+    <div className={overlayClass}>
+      <form className={formClass} onSubmit={handleSubmit}>
         <h2 className="text-lg font-semibold text-zinc-900">{title}</h2>
         <div className="mt-4 grid gap-4">
           <Field label="Name" error={errors.name}>
@@ -146,7 +149,7 @@ export function ProfileForm({
         <div className="mt-6 flex justify-end gap-2">
           <button
             type="button"
-            className="cursor-pointer rounded-lg border border-zinc-200 px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-50"
+            className={secondaryButtonClass}
             onClick={onCancel}
             disabled={busy}
           >
@@ -154,7 +157,7 @@ export function ProfileForm({
           </button>
           <button
             type="submit"
-            className="cursor-pointer rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-800 disabled:opacity-60 disabled:cursor-not-allowed"
+            className={primaryButtonClass}
             disabled={busy}
           >
             {busy ? "Saving…" : "Save"}

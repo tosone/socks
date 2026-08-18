@@ -11,22 +11,6 @@ use tokio::net::ToSocketAddrs;
 
 use crate::error::{AppError, AppResult};
 
-const SAMPLE_COMMAND: &str = r#"i=1
-while [ "$i" -le 20 ]; do
-  case $((i % 6)) in
-    0) color=32; label=ok ;;
-    1) color=36; label=info ;;
-    2) color=33; label=warn ;;
-    3) color=35; label=task ;;
-    4) color=34; label=step ;;
-    *) color=31; label=check ;;
-  esac
-  printf "\033[%sm[%02d/20] mock %s log from remote command path=/srv/app/releases/2026-08-17/bin/deploy-worker target=production-ap-southeast-1 request_id=ssh-runner-demo-%02d args=\"--dry-run=false --batch-size=2048 --retry-window=20s --feature=long-line-wrapping-validation\" payload=abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789\033[0m\n" "$color" "$i" "$label" "$i"
-  sleep 1
-  i=$((i + 1))
-done
-printf "\033[32mMock command completed.\033[0m\n""#;
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshRunInput {
@@ -36,6 +20,8 @@ pub struct SshRunInput {
     pub auth_mode: SshAuthMode,
     pub private_key_path: Option<String>,
     pub password: Option<String>,
+    pub service_password: String,
+    pub method: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -212,6 +198,12 @@ pub async fn run_sample(app: AppHandle, input: SshRunInput) -> AppResult<SshRunR
     if input.host.trim().is_empty() {
         return run_local_sample(&app).await;
     }
+    if input.service_password.is_empty() {
+        return Err(AppError::msg("Service password is required."));
+    }
+    if input.method.trim().is_empty() {
+        return Err(AppError::msg("Encryption method is required."));
+    }
 
     let host = input.host.trim().to_string();
     let port = input.port;
@@ -224,12 +216,13 @@ pub async fn run_sample(app: AppHandle, input: SshRunInput) -> AppResult<SshRunR
         ),
     );
     let mut session = Session::connect(&input, (host.as_str(), port), &app).await?;
+    let command = install_command(&input);
     emit_log(
         &app,
         SshLogStream::System,
-        format!("\x1b[32mConnected\x1b[0m. Running sample command.\n$ {SAMPLE_COMMAND}\n"),
+        format!("\x1b[32mConnected\x1b[0m. Running installer.\n$ {command}\n"),
     );
-    let exit_status = session.call(SAMPLE_COMMAND, &app).await?;
+    let exit_status = session.call(&command, &app).await?;
     session.close().await;
     Ok(SshRunResult { exit_status })
 }
@@ -253,6 +246,27 @@ async fn run_local_sample(app: &AppHandle) -> AppResult<SshRunResult> {
     Ok(SshRunResult {
         exit_status: Some(0),
     })
+}
+
+fn install_command(input: &SshRunInput) -> String {
+    let domain = shell_quote(input.host.trim());
+    let password = shell_quote(&input.service_password);
+    let method = shell_quote(input.method.trim());
+
+    format!(
+        r#"set -eu
+if ! command -v docker >/dev/null 2>&1; then
+  curl -fsSL https://get.docker.com | sh
+fi
+docker pull socks-server:dev
+docker rm -f socks-server >/dev/null 2>&1 || true
+docker run -d --name socks-server --restart unless-stopped -p 443:443/tcp -e SS_DOMAIN={domain} -e SS_PASSWORD={password} -e SS_METHOD={method} socks-server:dev
+docker ps --filter name=socks-server"#
+    )
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn username(input: &SshRunInput) -> String {

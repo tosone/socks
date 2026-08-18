@@ -7,6 +7,13 @@ type ConfirmDialogProps = {
   busy?: boolean;
 };
 
+const overlayClass = "fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4";
+const panelClass = "w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl";
+const cancelButtonClass =
+  "cursor-pointer rounded-lg border border-zinc-200 px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed";
+const confirmButtonClass =
+  "cursor-pointer rounded-lg bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60";
+
 export function ConfirmDialog({
   title,
   message,
@@ -16,14 +23,14 @@ export function ConfirmDialog({
   busy = false,
 }: ConfirmDialogProps) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl">
+    <div className={overlayClass}>
+      <div className={panelClass}>
         <h2 className="text-lg font-semibold text-zinc-900">{title}</h2>
         <p className="mt-2 text-sm text-zinc-600">{message}</p>
         <div className="mt-6 flex justify-end gap-2">
           <button
             type="button"
-            className="cursor-pointer rounded-lg border border-zinc-200 px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed"
+            className={cancelButtonClass}
             onClick={onCancel}
             disabled={busy}
           >
@@ -31,7 +38,7 @@ export function ConfirmDialog({
           </button>
           <button
             type="button"
-            className="cursor-pointer rounded-lg bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+            className={confirmButtonClass}
             onClick={onConfirm}
             disabled={busy}
           >

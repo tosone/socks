@@ -63,6 +63,8 @@ export type SshRunInput = {
   authMode: SshAuthMode;
   privateKeyPath?: string | null;
   password?: string | null;
+  servicePassword: string;
+  method: string;
 };
 
 export type SshRunEvent = {

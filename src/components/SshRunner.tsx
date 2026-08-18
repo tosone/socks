@@ -1,11 +1,24 @@
 import { useEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { ChevronsDown, KeyRound, LockKeyhole, Play } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  ChevronsDown,
+  Eye,
+  EyeOff,
+  Play,
+  Server,
+} from "lucide-react";
 import { runSshSample } from "../api";
-import type { SshAuthMode, SshRunEvent } from "../types";
+import type { ProfileInput, SshAuthMode, SshRunEvent } from "../types";
 
 const PRIVATE_KEY_PATH_KEY = "socks.ssh.privateKeyPath";
 const DEFAULT_PRIVATE_KEY_PATH = "~/.ssh/id_ed25519";
+const DEFAULT_METHOD = "2022-blake3-chacha20-poly1305";
+const inputBaseClass =
+  "h-10 w-full rounded-lg border border-zinc-300 bg-white text-sm text-zinc-900 outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200";
+const inputClass = `${inputBaseClass} px-3`;
+const passwordInputClass = `${inputBaseClass} py-0 pl-3 pr-10`;
 const ANSI_PATTERN = /\x1b\[([0-9;]*)m/g;
 const ANSI_COLORS: Record<number, string> = {
   30: "#555f6d",
@@ -39,15 +52,26 @@ type Segment = {
   dim?: boolean;
 };
 
-export function SshRunner() {
+type SshRunnerProps = {
+  ciphers: string[];
+  onAddProfile: (input: ProfileInput) => Promise<void>;
+};
+
+export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
   const [host, setHost] = useState("");
   const [port, setPort] = useState(22);
   const [username, setUsername] = useState("root");
   const [authMode, setAuthMode] = useState<SshAuthMode>("key");
   const [privateKeyPath, setPrivateKeyPath] = useState(DEFAULT_PRIVATE_KEY_PATH);
   const [password, setPassword] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const [servicePassword, setServicePassword] = useState("change-me");
+  const [servicePasswordVisible, setServicePasswordVisible] = useState(false);
+  const [method, setMethod] = useState(ciphers[0] ?? DEFAULT_METHOD);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [running, setRunning] = useState(false);
+  const [installedProfile, setInstalledProfile] = useState<ProfileInput | null>(null);
+  const [addingProfile, setAddingProfile] = useState(false);
   const [follow, setFollow] = useState(true);
   const logRef = useRef<HTMLDivElement | null>(null);
   const runningRef = useRef(false);
@@ -65,6 +89,12 @@ export function SshRunner() {
       window.localStorage.setItem(PRIVATE_KEY_PATH_KEY, privateKeyPath);
     }
   }, [authMode, privateKeyPath]);
+
+  useEffect(() => {
+    if (!ciphers.includes(method)) {
+      setMethod(ciphers[0] ?? DEFAULT_METHOD);
+    }
+  }, [ciphers, method]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -106,11 +136,14 @@ export function SshRunner() {
     if (host.trim().length === 0) {
       return false;
     }
+    if (servicePassword.length === 0 || method.trim().length === 0) {
+      return false;
+    }
     if (authMode === "key") {
       return privateKeyPath.trim().length > 0;
     }
     return password.length > 0;
-  }, [authMode, host, password, privateKeyPath, running]);
+  }, [authMode, host, method, password, privateKeyPath, running, servicePassword]);
 
   async function handleRun() {
     if (!canRun || runningRef.current) {
@@ -119,22 +152,57 @@ export function SshRunner() {
     runningRef.current = true;
     setLogs([]);
     setFollow(true);
+    setInstalledProfile(null);
     setRunning(true);
     try {
-      await runSshSample({
+      const result = await runSshSample({
         host: host.trim(),
         port,
         username: username.trim(),
         authMode,
         privateKeyPath: authMode === "key" ? privateKeyPath.trim() : null,
         password: authMode === "password" ? password : null,
+        servicePassword,
+        method,
       });
+      if (result.exitStatus === 0) {
+        setInstalledProfile(buildProfileInput());
+      }
     } catch (err) {
       pushLocalLog("stderr", `\x1b[31m${String(err)}\x1b[0m\n`);
     } finally {
       runningRef.current = false;
       setRunning(false);
     }
+  }
+
+  async function handleAddProfile() {
+    if (!installedProfile || addingProfile) {
+      return;
+    }
+    setAddingProfile(true);
+    try {
+      await onAddProfile(installedProfile);
+      pushLocalLog("system", "\x1b[32mServer profile added.\x1b[0m\n");
+      setInstalledProfile(null);
+    } catch (err) {
+      pushLocalLog("stderr", `\x1b[31m${String(err)}\x1b[0m\n`);
+    } finally {
+      setAddingProfile(false);
+    }
+  }
+
+  function buildProfileInput(): ProfileInput {
+    const server = host.trim();
+    return {
+      name: server.slice(0, 10) || "server",
+      server,
+      port: 443,
+      password: servicePassword,
+      method,
+      plugin: "v2ray-plugin",
+      pluginOpts: `tls;host=${server}`,
+    };
   }
 
   function pushLocalLog(stream: SshRunEvent["stream"], data: string) {
@@ -170,20 +238,30 @@ export function SshRunner() {
   }
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col gap-4">
+    <section className="flex min-h-full flex-1 flex-col gap-3">
       <div className="rounded-xl border border-zinc-200 bg-white px-4 py-4 shadow-sm">
-        <div className="grid gap-3 sm:grid-cols-[1fr_7rem_1fr]">
-          <FieldText
-            label="IP"
-            value={host}
-            placeholder="192.0.2.10"
-            onChange={setHost}
-          />
-          <FieldNumber
-            label="Port"
-            value={port}
-            onChange={setPort}
-          />
+        <div>
+          <div>
+            <p className="mb-1.5 text-xs font-medium text-zinc-500">IP / Port</p>
+            <div className="grid grid-cols-[1fr_5rem] gap-2">
+              <input
+                className={inputClass}
+                value={host}
+                placeholder="192.0.2.10"
+                onChange={(event) => setHost(event.target.value)}
+              />
+              <input
+                className={`${inputClass} appearance-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
+                min={1}
+                max={65535}
+                type="number"
+                value={port}
+                onChange={(event) => setPort(clampPort(event.target.valueAsNumber))}
+              />
+            </div>
+          </div>
+        </div>
+        <div className="mt-3">
           <FieldText
             label="User"
             value={username}
@@ -192,44 +270,77 @@ export function SshRunner() {
           />
         </div>
 
-        <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto]">
-          {authMode === "key" ? (
-            <FieldText
-              label="Private key path"
-              value={privateKeyPath}
-              placeholder="~/.ssh/id_ed25519"
-              onChange={setPrivateKeyPath}
-            />
-          ) : (
-            <FieldPassword
-              label="Password"
-              value={password}
-              onChange={setPassword}
-            />
-          )}
-          <div className="grid grid-cols-[auto_auto] gap-2 self-end sm:grid-cols-1">
+        <div className="mt-3">
+          <p className="mb-1.5 text-xs font-medium text-zinc-500">
+            {authMode === "key" ? "Private key path" : "SSH password"}
+          </p>
+          <div className="grid grid-cols-[1fr_6.5rem] gap-2">
+            {authMode === "key" ? (
+              <input
+                className={inputClass}
+                value={privateKeyPath}
+                placeholder="~/.ssh/id_ed25519"
+                onChange={(event) => setPrivateKeyPath(event.target.value)}
+              />
+            ) : (
+              <PasswordInput
+                value={password}
+                visible={passwordVisible}
+                onChange={setPassword}
+                onToggle={() => setPasswordVisible((current) => !current)}
+              />
+            )}
             <button
               type="button"
-              className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-700 hover:bg-zinc-100"
+              className="inline-flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-700 hover:bg-zinc-100"
               onClick={() => setAuthMode((current) => (current === "key" ? "password" : "key"))}
             >
-              {authMode === "key" ? <LockKeyhole size={16} /> : <KeyRound size={16} />}
-              {authMode === "key" ? "Use password" : "Use key"}
-            </button>
-            <button
-              type="button"
-              className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg bg-zinc-900 px-4 text-sm font-medium text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
-              onClick={handleRun}
-              disabled={!canRun}
-            >
-              <Play size={16} fill="currentColor" />
-              {running ? "Running" : "Run"}
+              {authMode === "key" ? "Password" : "Key"}
             </button>
           </div>
         </div>
+
+        <div className="mt-3 grid grid-cols-[1fr_11rem] gap-3">
+          <FieldSelect
+            label="Encryption"
+            value={method}
+            options={ciphers.length > 0 ? ciphers : [DEFAULT_METHOD]}
+            onChange={setMethod}
+          />
+          <FieldPassword
+            label="Server password"
+            value={servicePassword}
+            visible={servicePasswordVisible}
+            onChange={setServicePassword}
+            onToggle={() => setServicePasswordVisible((current) => !current)}
+          />
+        </div>
       </div>
 
-      <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-zinc-800 bg-[#07090d] shadow-2xl shadow-zinc-950/15">
+      <div className={`grid gap-2 ${installedProfile ? "grid-cols-2" : "grid-cols-1"}`}>
+        <button
+          type="button"
+          className="inline-flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-zinc-900 px-4 text-sm font-medium text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={handleRun}
+          disabled={!canRun}
+        >
+          <Play size={16} fill="currentColor" />
+          {running ? "Running" : "Run installer"}
+        </button>
+        {installedProfile ? (
+          <button
+            type="button"
+            className="inline-flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 text-sm font-medium text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={handleAddProfile}
+            disabled={addingProfile}
+          >
+            <Server size={16} />
+            {addingProfile ? "Adding" : "Add server"}
+          </button>
+        ) : null}
+      </div>
+
+      <div className="relative min-h-64 flex-1 overflow-hidden rounded-xl border border-zinc-800 bg-[#07090d] shadow-2xl shadow-zinc-950/15">
         <div className="absolute right-2 top-2 z-10">
           <button
             type="button"
@@ -267,6 +378,7 @@ export function SshRunner() {
           </div>
         </div>
       </div>
+      <div className="h-1 shrink-0" />
     </section>
   );
 }
@@ -286,7 +398,7 @@ function FieldText({
     <div>
       <p className="mb-1.5 text-xs font-medium text-zinc-500">{label}</p>
       <input
-        className="h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200"
+        className={inputClass}
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
@@ -298,45 +410,126 @@ function FieldText({
 function FieldPassword({
   label,
   value,
+  visible,
   onChange,
+  onToggle,
 }: {
   label: string;
   value: string;
+  visible: boolean;
   onChange: (value: string) => void;
+  onToggle: () => void;
 }) {
   return (
     <div>
       <p className="mb-1.5 text-xs font-medium text-zinc-500">{label}</p>
-      <input
-        className="h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200"
-        type="password"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      />
+      <PasswordInput value={value} visible={visible} onChange={onChange} onToggle={onToggle} />
     </div>
   );
 }
 
-function FieldNumber({
+function PasswordInput({
+  value,
+  visible,
+  onChange,
+  onToggle,
+}: {
+  value: string;
+  visible: boolean;
+  onChange: (value: string) => void;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="relative">
+      <input
+        className={passwordInputClass}
+        type={visible ? "text" : "password"}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <button
+        type="button"
+        className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 cursor-pointer items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
+        onClick={onToggle}
+        aria-label={visible ? "Hide password" : "Show password"}
+        aria-pressed={visible}
+      >
+        {visible ? <EyeOff size={16} /> : <Eye size={16} />}
+      </button>
+    </div>
+  );
+}
+
+function FieldSelect({
   label,
   value,
+  options,
   onChange,
 }: {
   label: string;
-  value: number;
-  onChange: (value: number) => void;
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    function onClick(event: MouseEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, []);
+
   return (
     <div>
       <p className="mb-1.5 text-xs font-medium text-zinc-500">{label}</p>
-      <input
-        className="h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200"
-        min={1}
-        max={65535}
-        type="number"
-        value={value}
-        onChange={(event) => onChange(clampPort(event.target.valueAsNumber))}
-      />
+      <div className="relative" ref={rootRef}>
+        <button
+          type="button"
+          className={`${inputClass} flex cursor-pointer items-center justify-between gap-2 text-left`}
+          onClick={() => setOpen((current) => !current)}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+        >
+          <span className="truncate font-mono text-[13px]">{value}</span>
+          <ChevronDown
+            size={16}
+            className={`shrink-0 text-zinc-400 transition ${open ? "rotate-180" : ""}`}
+          />
+        </button>
+        {open ? (
+          <ul
+            role="listbox"
+            className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-xl border border-zinc-200 bg-white p-1 shadow-lg"
+          >
+            {options.map((option) => {
+              const selected = option === value;
+              return (
+                <li key={option}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    className={`flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg px-3 py-2 text-left font-mono text-[13px] ${selected ? "bg-zinc-900 text-white" : "text-zinc-800 hover:bg-zinc-100"
+                      }`}
+                    onClick={() => {
+                      onChange(option);
+                      setOpen(false);
+                    }}
+                  >
+                    <span className="truncate">{option}</span>
+                    {selected ? <Check size={14} className="shrink-0" /> : null}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
+      </div>
     </div>
   );
 }
