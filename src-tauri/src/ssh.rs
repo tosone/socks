@@ -258,9 +258,9 @@ fn install_command(input: &SshRunInput) -> String {
 if ! command -v docker >/dev/null 2>&1; then
   curl -fsSL https://get.docker.com | sh
 fi
-docker pull socks-server:dev
+docker pull ghcr.io/tosone/socks:latest
 docker rm -f socks-server >/dev/null 2>&1 || true
-docker run -d --name socks-server --restart unless-stopped -p 443:443/tcp -e SS_DOMAIN={domain} -e SS_PASSWORD={password} -e SS_METHOD={method} socks-server:dev
+docker run -d --name socks-server --restart unless-stopped -p 443:443/tcp -e SS_DOMAIN={domain} -e SS_PASSWORD={password} -e SS_METHOD={method} ghcr.io/tosone/socks:latest
 docker ps --filter name=socks-server"#
     )
 }
