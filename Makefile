@@ -1,8 +1,6 @@
 SHELL := /bin/bash
 
 ROOT_DIR := $(abspath .)
-PLUGIN_DIR := $(ROOT_DIR)/src-tauri/resources/plugins/v2ray-plugin
-PLUGIN_BIN := $(PLUGIN_DIR)/v2ray-plugin
 VPN_DIR := $(ROOT_DIR)/src-tauri/resources/extensions/vpn
 VPN_APP_SWIFT := $(VPN_DIR)/SocksTunnelControl.swift
 VPN_EXTENSION_SWIFT := $(VPN_DIR)/VpnExtension/PacketTunnelProvider.swift
@@ -21,37 +19,30 @@ VPN_TMP_DIR ?= $(ROOT_DIR)/target/tmp
 TAURI_BUNDLE_DIR ?= $(ROOT_DIR)/src-tauri/target/release/bundle/macos
 TAURI_APP_BUNDLE ?= $(TAURI_BUNDLE_DIR)/socks.app
 
-PLUGIN_GOOS ?= darwin
 UNAME_M := $(shell uname -m)
 ifeq ($(UNAME_M),arm64)
-PLUGIN_GOARCH ?= arm64
 MACOS_ARCH ?= arm64
 else ifeq ($(UNAME_M),x86_64)
-PLUGIN_GOARCH ?= amd64
 MACOS_ARCH ?= x86_64
 else
-PLUGIN_GOARCH ?= $(UNAME_M)
 MACOS_ARCH ?= $(UNAME_M)
 endif
 MACOS_DEPLOYMENT_TARGET ?= 13.0
 MACOS_TARGET := $(MACOS_ARCH)-apple-macos$(MACOS_DEPLOYMENT_TARGET)
 
-.PHONY: help all frontend rust-check plugin extension extension-check extension-build extension-package extension-embed tauri package clean-plugin clean-extension
+.PHONY: help all frontend rust-check extension extension-check extension-build extension-package extension-embed tauri package clean-extension
 
 help:
 	@printf "%s\n" \
 		"Targets:" \
-		"  make plugin          Build bundled v2ray-plugin for $(PLUGIN_GOOS)/$(PLUGIN_GOARCH)." \
 		"  make extension       Build/package VPN extension; uses xcodebuild when an Xcode project exists." \
-		"  make tauri           Build plugin, validate/build extension, then run Tauri packaging." \
+		"  make tauri           Validate/build extension, then run Tauri packaging." \
 		"  make package         Alias for tauri." \
 		"  make frontend        Build the Vite frontend." \
 		"  make rust-check      Run cargo check for src-tauri." \
 		"  make extension-embed Embed built .appex into TAURI_APP_BUNDLE=.../socks.app." \
 		"" \
 		"Variables:" \
-		"  PLUGIN_GOOS=$(PLUGIN_GOOS)" \
-		"  PLUGIN_GOARCH=$(PLUGIN_GOARCH)" \
 		"  VPN_XCODEPROJ=$(VPN_XCODEPROJ)" \
 		"  VPN_SCHEME=$(VPN_SCHEME)" \
 		"  VPN_CONFIGURATION=$(VPN_CONFIGURATION)" \
@@ -68,16 +59,6 @@ frontend:
 
 rust-check:
 	cd src-tauri && cargo check
-
-plugin:
-	@command -v go >/dev/null 2>&1 || { echo "go is required to build v2ray-plugin." >&2; exit 1; }
-	CGO_ENABLED=0 GOOS=$(PLUGIN_GOOS) GOARCH=$(PLUGIN_GOARCH) \
-		go build \
-			-C "$(PLUGIN_DIR)" \
-			-trimpath \
-			-ldflags "-s -w -buildid=" \
-			-o "$(PLUGIN_BIN)"
-	chmod 0755 "$(PLUGIN_BIN)"
 
 extension: extension-check
 	@if [[ -d "$(VPN_XCODEPROJ)" ]]; then \
@@ -137,7 +118,7 @@ extension-embed:
 	rm -rf "$(TAURI_APP_BUNDLE)/Contents/PlugIns/$$(basename "$$appex")"; \
 	cp -R "$$appex" "$(TAURI_APP_BUNDLE)/Contents/PlugIns/"
 
-tauri: plugin extension
+tauri: extension
 	bun run tauri build
 	@if [[ -d "$(TAURI_APP_BUNDLE)" ]]; then \
 		$(MAKE) extension-embed TAURI_APP_BUNDLE="$(TAURI_APP_BUNDLE)"; \
@@ -146,9 +127,6 @@ tauri: plugin extension
 	fi
 
 package: tauri
-
-clean-plugin:
-	rm -f "$(PLUGIN_BIN)"
 
 clean-extension:
 	rm -rf "$(VPN_DERIVED_DATA)" "$(VPN_EXTENSION_OUT_DIR)" "$(VPN_TMP_DIR)"

@@ -26,9 +26,6 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/icon.icns"],
-    "resources": {
-      "resources/plugins/v2ray-plugin/v2ray-plugin": "plugins/v2ray-plugin"
-    }
+    "icon": ["icons/icon.icns"]
   }
 }

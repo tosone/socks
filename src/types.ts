@@ -5,8 +5,6 @@ export type Profile = {
   port: number;
   password: string;
   method: string;
-  plugin?: string | null;
-  pluginOpts?: string | null;
   createdAt: number;
 };
 
@@ -16,8 +14,6 @@ export type ProfileInput = {
   port: number;
   password: string;
   method: string;
-  plugin?: string | null;
-  pluginOpts?: string | null;
 };
 
 export type RuntimeStatus = {
@@ -58,7 +54,6 @@ export type SshRunInput = {
   password?: string | null;
   servicePassword: string;
   method: string;
-  pluginDomain?: string | null;
 };
 
 export type SshRunEvent = {
@@ -68,5 +63,22 @@ export type SshRunEvent = {
 
 export type SshRunResult = {
   exitStatus: number | null;
-  pluginCertRaw?: string | null;
+};
+
+export type InstallerRunInput = {
+  ip: string;
+  port: number;
+  user: string;
+  privateKeyPath: string;
+  password: string;
+  proxyServerIp: string;
+};
+
+export type InstallerRunEvent = {
+  stream: "stdout" | "stderr" | "system";
+  data: string;
+};
+
+export type InstallerRunResult = {
+  exitStatus: number | null;
 };

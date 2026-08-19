@@ -12,7 +12,6 @@ This project is macOS-only for now.
 - Install a privileged LaunchDaemon helper once, then connect and disconnect without repeated administrator prompts.
 - Show live upload and download speed with a sparkline for the recent traffic window.
 - Persist per-profile total upload and download traffic.
-- Bundle SIP003 plugin executables as app resources.
 
 ## Requirements
 
@@ -72,10 +71,9 @@ src-tauri/icons/icon.png
 
 1. Install the helper once from the app. This requires an administrator password and installs a LaunchDaemon helper under `/Library/PrivilegedHelperTools`.
 2. Create a profile with name, server, port, password, and encryption method.
-3. Optionally set a SIP003 plugin name and plugin options.
-4. Use the profile card menu to connect, disconnect, edit, or delete a profile.
-5. Only one profile can be active at a time. Connecting another profile disconnects the current one first.
-6. Disconnect or quit the app to restore the previous routes.
+3. Use the profile card menu to connect, disconnect, edit, or delete a profile.
+4. Only one profile can be active at a time. Connecting another profile disconnects the current one first.
+5. Disconnect or quit the app to restore the previous routes.
 
 When connected, the helper applies IPv4 routes similar to:
 
@@ -113,33 +111,10 @@ On macOS, the app data directory is typically:
 
 Traffic sparkline samples are kept in memory only. They cover the recent traffic window and are discarded on disconnect, reconnect, or app restart.
 
-## Bundled Plugins
-
-SIP003 plugins can be bundled as Tauri resources. Put plugin executables under:
-
-```text
-src-tauri/resources/plugins/
-```
-
-The current bundle configuration maps:
-
-```text
-src-tauri/resources/plugins/v2ray-plugin/v2ray-plugin -> plugins/v2ray-plugin
-```
-
-When a profile uses a plugin name without path separators, the app first checks the bundled plugin resource directory. For example, `v2ray-plugin` resolves to:
-
-```text
-<App>.app/Contents/Resources/plugins/v2ray-plugin
-```
-
-If no bundled executable is found, the app falls back to the system `PATH`. Absolute plugin paths are used as-is.
-
 ## Limitations
 
 - IPv6 default routes are not managed yet.
 - DNS may still use the original system resolver.
 - SIP008 subscriptions are not implemented yet.
 - App Sandbox is not enabled.
-- Bundled plugin binaries must match the target macOS CPU architecture.
 - AEAD-2022 methods require a Base64 key of the correct length.

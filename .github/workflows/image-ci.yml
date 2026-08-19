@@ -10,20 +10,38 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository }}
+  IMAGE_NAMESPACE: ghcr.io/${{ github.repository_owner }}
 
 jobs:
   image-build:
-    name: image-build-${{ matrix.arch }}
+    name: image-build-${{ matrix.image }}-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: amd64
+          - image: socks-server
+            dockerfile: ./build/socks-server/Dockerfile
+            context: .
+            arch: amd64
             runner: ubuntu-24.04
             platform: linux/amd64
-          - arch: arm64
+          - image: socks-server
+            dockerfile: ./build/socks-server/Dockerfile
+            context: .
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+          - image: socks-proxy
+            dockerfile: ./build/socks-proxy/Dockerfile
+            context: ./build/socks-proxy
+            arch: amd64
+            runner: ubuntu-24.04
+            platform: linux/amd64
+          - image: socks-proxy
+            dockerfile: ./build/socks-proxy/Dockerfile
+            context: ./build/socks-proxy
+            arch: arm64
             runner: ubuntu-24.04-arm
             platform: linux/arm64
     steps:
@@ -47,20 +65,26 @@ jobs:
       - name: Build image
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: ./build/Dockerfile
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
           platforms: ${{ matrix.platform }}
           push: true
-          tags: ${{ env.IMAGE_NAME }}:latest-${{ matrix.arch }}
+          tags: ${{ env.IMAGE_NAMESPACE }}/${{ matrix.image }}:latest-${{ matrix.arch }}
           provenance: false
           sbom: false
           outputs: type=registry,force-compression=true,oci-mediatypes=true
 
   merge-multi-arch:
-    name: merge-multi-arch
+    name: merge-multi-arch-${{ matrix.image }}
     runs-on: ubuntu-24.04
     needs:
       - image-build
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - socks-server
+          - socks-proxy
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -75,6 +99,6 @@ jobs:
       - name: Create and push multi-arch manifest
         run: |
           docker buildx imagetools create \
-            -t ${{ env.IMAGE_NAME }}:latest \
-            ${{ env.IMAGE_NAME }}:latest-amd64 \
-            ${{ env.IMAGE_NAME }}:latest-arm64
+            -t ${{ env.IMAGE_NAMESPACE }}/${{ matrix.image }}:latest \
+            ${{ env.IMAGE_NAMESPACE }}/${{ matrix.image }}:latest-amd64 \
+            ${{ env.IMAGE_NAMESPACE }}/${{ matrix.image }}:latest-arm64

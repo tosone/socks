@@ -10,7 +10,7 @@ use tokio::task::JoinHandle;
 
 use crate::error::{AppError, AppResult};
 use crate::outline_config;
-use crate::profile::{self, Profile, ProfileInput};
+use crate::profiles::{self, Profile, ProfileInput};
 
 const CONNECTIVITY_ATTEMPTS: usize = 3;
 const CONNECTIVITY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -59,7 +59,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn load(data_dir: PathBuf, app: AppHandle) -> AppResult<Self> {
-        let profiles = profile::load_profiles(&data_dir)?;
+        let profiles = profiles::load_profiles(&data_dir)?;
         let traffic_totals = profiles
             .iter()
             .map(|profile| {
@@ -97,10 +97,10 @@ impl AppState {
     }
 
     pub async fn create_profile(&self, input: ProfileInput) -> AppResult<Profile> {
-        let created = profile::create_profile(input)?;
+        let created = profiles::create_profile(input)?;
         let mut profiles = self.profiles.lock().await;
         profiles.push(created.clone());
-        profile::save_profiles(&self.data_dir, &profiles)?;
+        profiles::save_profiles(&self.data_dir, &profiles)?;
         self.traffic_totals
             .lock()
             .await
@@ -115,9 +115,9 @@ impl AppState {
             .iter_mut()
             .find(|p| p.id == id)
             .ok_or_else(|| AppError::msg("Profile not found"))?;
-        profile::apply_update(profile, input)?;
+        profiles::apply_update(profile, input)?;
         let updated = profile.clone();
-        profile::save_profiles(&self.data_dir, &profiles)?;
+        profiles::save_profiles(&self.data_dir, &profiles)?;
         drop(profiles);
         if self.active_id().await.as_deref() == Some(id) {
             self.connect(id).await?;
@@ -135,7 +135,7 @@ impl AppState {
         if profiles.len() == before {
             return Err(AppError::msg("Profile not found"));
         }
-        profile::save_profiles(&self.data_dir, &profiles)?;
+        profiles::save_profiles(&self.data_dir, &profiles)?;
         self.traffic_totals.lock().await.remove(id);
         remove_traffic_totals(&self.data_dir, id)?;
         Ok(())

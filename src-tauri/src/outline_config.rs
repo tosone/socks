@@ -1,6 +1,6 @@
 use crate::error::AppResult;
 use crate::password;
-use crate::profile::Profile;
+use crate::profiles::Profile;
 
 pub fn transport_config(profile: &Profile) -> AppResult<String> {
     let secret = password::normalize_for_method(&profile.method, &profile.password)?;
@@ -29,8 +29,6 @@ mod tests {
             port: 8388,
             password: password.into(),
             method: method.into(),
-            plugin: None,
-            plugin_opts: None,
             created_at: 0,
         }
     }

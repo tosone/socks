@@ -22,27 +22,12 @@ RUN case "${TARGETARCH}" in \
       --bin ssserver \
     && cp "target/${rust_target}/release/ssserver" /usr/local/bin/ssserver
 
-FROM golang:1.26-alpine AS plugin-builder
-
-ARG TARGETARCH
-WORKDIR /build/v2ray-plugin
-COPY src-tauri/resources/plugins/v2ray-plugin/ ./
-
-RUN case "${TARGETARCH}" in \
-      amd64) goarch="amd64" ;; \
-      arm64) goarch="arm64" ;; \
-      *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac \
-    && CGO_ENABLED=0 GOOS=linux GOARCH="${goarch}" \
-      go build -trimpath -ldflags "-s -w -buildid=" -o /usr/local/bin/v2ray-plugin
-
 FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates openssl tzdata \
     && mkdir -p /etc/shadowsocks-rust
 
 COPY --from=shadowsocks-builder /usr/local/bin/ssserver /usr/local/bin/ssserver
-COPY --from=plugin-builder /usr/local/bin/v2ray-plugin /usr/local/bin/v2ray-plugin
 
 RUN cat > /usr/local/bin/docker-entrypoint.sh <<'EOF'
 #!/bin/sh
@@ -85,39 +70,21 @@ normalize_ss_password() {
 
 ss_method="${SS_METHOD:-2022-blake3-chacha20-poly1305}"
 ss_password="$(normalize_ss_password "$ss_method" "${SS_PASSWORD:-change-me}")"
-plugin_config=""
-if [ -n "${SS_DOMAIN:-}" ]; then
-  tls_dir="${SS_TLS_DIR:-/etc/socks/tls}"
-  tls_cert="${SS_TLS_CERT:-$tls_dir/tls.crt}"
-  tls_key="${SS_TLS_KEY:-$tls_dir/tls.key}"
-  if [ ! -s "$tls_cert" ] || [ ! -s "$tls_key" ]; then
-    mkdir -p "$tls_dir"
-    openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3650 \
-      -subj "/CN=${SS_DOMAIN}" \
-      -addext "subjectAltName=DNS:${SS_DOMAIN}" \
-      -keyout "$tls_key" \
-      -out "$tls_cert" >/dev/null 2>&1
-  fi
-  chmod 0755 "$tls_dir"
-  chmod 0644 "$tls_cert" "$tls_key"
-  plugin_config=",\"plugin\":\"v2ray-plugin\",\"plugin_opts\":\"server;tls;host=${SS_DOMAIN};cert=${tls_cert};key=${tls_key}\",\"plugin_mode\":\"tcp_only\""
-fi
 
 cat > /etc/shadowsocks-rust/config.json <<EOF_CONFIG
-{"server":"0.0.0.0","server_port":443,"password":"${ss_password}","timeout":300,"method":"${ss_method}"${plugin_config}}
+{"server":"0.0.0.0","server_port":443,"password":"${ss_password}","timeout":300,"method":"${ss_method}"}
 EOF_CONFIG
 
 exec "$@"
 EOF
 
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/ssserver /usr/local/bin/v2ray-plugin
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/ssserver
 
 EXPOSE 443/tcp
 
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["ssserver", "--log-without-time", "-a", "nobody", "-c", "/etc/shadowsocks-rust/config.json"]
 
-# sslocal -b 127.0.0.1:1080 -s example.com:443 -m "$SS_METHOD" -k "$SS_PASSWORD" --plugin v2ray-plugin --plugin-opts "tls;host=example.com;certRaw=..."
-# docker buildx build --platform linux/amd64,linux/arm64 -f build/Dockerfile -t socks-server:latest .
+# sslocal -b 127.0.0.1:1080 -s example.com:443 -m "$SS_METHOD" -k "$SS_PASSWORD"
+# docker buildx build --platform linux/amd64,linux/arm64 -f build/socks-server/Dockerfile -t socks-server:latest .
 # docker run --rm -e SS_PASSWORD=change-me -e SS_METHOD=2022-blake3-chacha20-poly1305 -p 443:443/tcp socks-server:latest
-# docker run --rm -e SS_DOMAIN=example.com -e SS_PASSWORD=change-me -e SS_METHOD=2022-blake3-chacha20-poly1305 -p 443:443/tcp socks-server:latest

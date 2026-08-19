@@ -20,8 +20,6 @@ TUN_NAME="${TUN_NAME:-socks0}"
 TUN_ADDRESS="${TUN_ADDRESS:-10.255.0.1/24}"
 SSLOCAL_BIN="${SSLOCAL_BIN:-/opt/socks/bin/sslocal}"
 ACL_PATH="${ACL_PATH:-/etc/socks/shadowsocks.acl}"
-SS_PLUGIN="${SS_PLUGIN:-/opt/socks/bin/v2ray-plugin}"
-SS_PLUGIN_DOMAIN="${SS_PLUGIN_DOMAIN:-}"
 
 SSLOCAL_PID=""
 SSLOCAL_PASSWORD=""
@@ -164,19 +162,6 @@ start_sslocal() {
     --tun-interface-name "$TUN_NAME"
     --acl "$ACL_PATH"
   )
-
-  if [[ -n "$SS_PLUGIN_DOMAIN" ]]; then
-    if [[ ! -x "$SS_PLUGIN" ]]; then
-      echo "Plugin is not executable: $SS_PLUGIN" >&2
-      exit 1
-    fi
-    args+=(--plugin "$SS_PLUGIN")
-    if [[ -n "${SS_PLUGIN_CERT_RAW:-}" ]]; then
-      args+=(--plugin-opts "tls;host=$SS_PLUGIN_DOMAIN;certRaw=$SS_PLUGIN_CERT_RAW")
-    else
-      args+=(--plugin-opts "tls;host=$SS_PLUGIN_DOMAIN")
-    fi
-  fi
 
   "$SSLOCAL_BIN" "${args[@]}" &
   SSLOCAL_PID="$!"

@@ -23,7 +23,6 @@ pub struct SshRunInput {
     pub password: Option<String>,
     pub service_password: String,
     pub method: String,
-    pub plugin_domain: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -37,7 +36,6 @@ pub enum SshAuthMode {
 #[serde(rename_all = "camelCase")]
 pub struct SshRunResult {
     pub exit_status: Option<u32>,
-    pub plugin_cert_raw: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -228,12 +226,9 @@ pub async fn run_sample(app: AppHandle, input: SshRunInput) -> AppResult<SshRunR
         SshLogStream::System,
         format!("\x1b[32mConnected\x1b[0m. Running installer.\n$ {command}\n"),
     );
-    let (exit_status, stdout) = session.call(&command, &app).await?;
+    let (exit_status, _) = session.call(&command, &app).await?;
     session.close().await;
-    Ok(SshRunResult {
-        exit_status,
-        plugin_cert_raw: parse_plugin_cert_raw(&stdout),
-    })
+    Ok(SshRunResult { exit_status })
 }
 
 async fn run_local_sample(app: &AppHandle) -> AppResult<SshRunResult> {
@@ -254,41 +249,10 @@ async fn run_local_sample(app: &AppHandle) -> AppResult<SshRunResult> {
     }
     Ok(SshRunResult {
         exit_status: Some(0),
-        plugin_cert_raw: None,
     })
 }
 
 fn install_command(input: &SshRunInput) -> AppResult<String> {
-    let plugin_domain = input
-        .plugin_domain
-        .as_deref()
-        .map(str::trim)
-        .filter(|domain| !domain.is_empty());
-    let plugin_domain_env = plugin_domain.map_or_else(String::new, |domain| {
-        format!(" -e SS_DOMAIN={}", shell_quote(domain))
-    });
-    let plugin_cert_command = plugin_domain.map_or_else(String::new, |_| {
-        r#"
-for i in $(seq 1 20); do
-  if sudo docker exec socks-server test -s /etc/socks/tls/tls.crt >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.5
-done
-if ! sudo docker exec socks-server test -s /etc/socks/tls/tls.crt >/dev/null 2>&1; then
-  echo "TLS certificate was not generated in the socks-server container." >&2
-  sudo docker logs --tail 80 socks-server >&2 || true
-  exit 1
-fi
-plugin_cert_raw="$(sudo docker exec socks-server sh -c "sed -n '/BEGIN CERTIFICATE/,/END CERTIFICATE/p' /etc/socks/tls/tls.crt | sed '/BEGIN CERTIFICATE/d;/END CERTIFICATE/d' | tr -d '\n'")"
-if [ -z "$plugin_cert_raw" ]; then
-  echo "TLS certificate exists but could not be read from the socks-server container." >&2
-  exit 1
-fi
-printf 'SOCKS_PLUGIN_CERT_RAW=%s\n' "$plugin_cert_raw"
-"#
-        .to_string()
-    });
     let password = password::normalize_for_method(input.method.trim(), &input.service_password)?;
     let password = shell_quote(&password);
     let method = shell_quote(input.method.trim());
@@ -300,18 +264,9 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 sudo docker pull ghcr.io/tosone/socks:latest
 sudo docker rm -f socks-server >/dev/null 2>&1 || true
-sudo docker run -d --name socks-server --restart unless-stopped -p 443:443/tcp -e SS_PASSWORD={password} -e SS_METHOD={method}{plugin_domain_env} ghcr.io/tosone/socks:latest
-sudo docker ps --filter name=socks-server{plugin_cert_command}"#
+sudo docker run -d --name socks-server --restart unless-stopped -p 443:443/tcp -e SS_PASSWORD={password} -e SS_METHOD={method} ghcr.io/tosone/socks:latest
+sudo docker ps --filter name=socks-server"#
     ))
-}
-
-fn parse_plugin_cert_raw(stdout: &str) -> Option<String> {
-    stdout
-        .lines()
-        .find_map(|line| line.strip_prefix("SOCKS_PLUGIN_CERT_RAW="))
-        .map(str::trim)
-        .filter(|cert| !cert.is_empty())
-        .map(str::to_string)
 }
 
 fn shell_quote(value: &str) -> String {

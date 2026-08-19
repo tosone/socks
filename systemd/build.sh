@@ -89,11 +89,6 @@ if ! command -v cargo-zigbuild >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v go >/dev/null 2>&1; then
-  echo "go is required to build v2ray-plugin." >&2
-  exit 1
-fi
-
 if command -v rustup >/dev/null 2>&1; then
   rustup target add "$TARGET"
 fi
@@ -110,22 +105,11 @@ cargo zigbuild \
   --features "$FEATURES" \
   --bin sslocal
 
-case "$ARCH" in
-  amd64) GOARCH_VALUE="amd64" ;;
-  arm64) GOARCH_VALUE="arm64" ;;
-esac
-
-CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH_VALUE" \
-  go build \
-    -C "$ROOT_DIR/src-tauri/resources/plugins/v2ray-plugin" \
-    -trimpath \
-    -ldflags "-s -w -buildid=" \
-    -o "$DIST_DIR/bin/v2ray-plugin"
-
 SSLOCAL_SRC="$ROOT_DIR/shadowsocks-rust/target/$TARGET/release/sslocal"
 install -m 0755 "$SSLOCAL_SRC" "$DIST_DIR/bin/sslocal"
 install -m 0755 "$SCRIPT_DIR/install.sh" "$DIST_DIR/install.sh"
 install -m 0755 "$SCRIPT_DIR/socks-run.sh" "$DIST_DIR/socks-run.sh"
+install -m 0755 "$SCRIPT_DIR/socks-cleanup.sh" "$DIST_DIR/socks-cleanup.sh"
 install -m 0644 "$SCRIPT_DIR/socks.service" "$DIST_DIR/socks.service"
 install -m 0644 "$SCRIPT_DIR/socks.env" "$DIST_DIR/socks.env"
 install -m 0644 "$SCRIPT_DIR/shadowsocks.acl" "$DIST_DIR/shadowsocks.acl"

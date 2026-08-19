@@ -145,7 +145,6 @@ collect_config() {
     export SS_METHOD="${SS_METHOD:-${METHOD_OPTIONS[0]}}"
     export TUN_NAME="${TUN_NAME:-socks0}"
     export TUN_ADDRESS="${TUN_ADDRESS:-10.255.0.1/24}"
-    export SS_PLUGIN_DOMAIN="${SS_PLUGIN_DOMAIN:-}"
     return
   fi
 
@@ -156,7 +155,6 @@ collect_config() {
   prompt_secret_required SS_PASSWORD "Server password"
   prompt_default TUN_NAME "TUN interface name" "${TUN_NAME:-socks0}"
   prompt_default TUN_ADDRESS "TUN interface address" "${TUN_ADDRESS:-10.255.0.1/24}"
-  prompt_optional SS_PLUGIN_DOMAIN "Plugin domain, empty to disable" "${SS_PLUGIN_DOMAIN:-}"
 }
 
 write_config_from_env() {
@@ -172,9 +170,6 @@ write_config_from_env() {
     printf "\n"
     printf "SSLOCAL_BIN=%q\n" "$INSTALL_DIR/bin/sslocal"
     printf "ACL_PATH=%q\n" "$ACL_PATH"
-    if [[ -n "${SS_PLUGIN_DOMAIN:-}" ]]; then
-      printf "SS_PLUGIN_DOMAIN=%q\n" "$SS_PLUGIN_DOMAIN"
-    fi
   } > "$CONFIG_PATH"
   chmod 0600 "$CONFIG_PATH"
 }
@@ -187,10 +182,8 @@ install_files() {
 
   install -d -m 0755 "$INSTALL_DIR/bin" "$CONFIG_DIR"
   install -m 0755 "$DIST_DIR/bin/sslocal" "$INSTALL_DIR/bin/sslocal"
-  if [[ -x "$DIST_DIR/bin/v2ray-plugin" ]]; then
-    install -m 0755 "$DIST_DIR/bin/v2ray-plugin" "$INSTALL_DIR/bin/v2ray-plugin"
-  fi
   install -m 0755 "$DIST_DIR/socks-run.sh" "$INSTALL_DIR/socks-run.sh"
+  install -m 0755 "$DIST_DIR/socks-cleanup.sh" "$INSTALL_DIR/bin/socks-cleanup"
   install -m 0644 "$DIST_DIR/socks.service" "$SERVICE_PATH"
   if [[ ! -f "$ACL_PATH" ]]; then
     install -m 0644 "$DIST_DIR/shadowsocks.acl" "$ACL_PATH"

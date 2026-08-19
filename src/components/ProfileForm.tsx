@@ -34,8 +34,6 @@ export function ProfileForm({
   const [method, setMethod] = useState(
     initial?.method ?? ciphers[0] ?? "2022-blake3-chacha20-poly1305",
   );
-  const [plugin, setPlugin] = useState(initial?.plugin ?? "");
-  const [pluginOpts, setPluginOpts] = useState(initial?.pluginOpts ?? "");
   const [errors, setErrors] = useState<FormErrors>({});
 
   const cipherOptions = useMemo(
@@ -74,8 +72,6 @@ export function ProfileForm({
       port: parsedPort,
       password,
       method,
-      plugin: plugin.trim() || null,
-      pluginOpts: pluginOpts.trim() || null,
     });
   }
 
@@ -129,22 +125,6 @@ export function ProfileForm({
           </Field>
           <Field label="Encryption" error={errors.method}>
             <CipherSelect value={method} options={cipherOptions} onChange={setMethod} />
-          </Field>
-          <Field label="Plugin (optional)">
-            <input
-              value={plugin}
-              onChange={(e) => setPlugin(e.target.value)}
-              placeholder="v2ray-plugin"
-              className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-400"
-            />
-          </Field>
-          <Field label="Plugin options (optional)">
-            <input
-              value={pluginOpts}
-              onChange={(e) => setPluginOpts(e.target.value)}
-              placeholder="tls;host=www.example.com;certRaw=..."
-              className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-400"
-            />
           </Field>
         </div>
         {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}

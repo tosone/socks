@@ -71,8 +71,6 @@ pub struct Profile {
     pub port: u16,
     pub password: String,
     pub method: String,
-    pub plugin: Option<String>,
-    pub plugin_opts: Option<String>,
     pub created_at: i64,
 }
 
@@ -84,8 +82,6 @@ pub struct ProfileInput {
     pub port: u16,
     pub password: String,
     pub method: String,
-    pub plugin: Option<String>,
-    pub plugin_opts: Option<String>,
 }
 
 impl ProfileInput {
@@ -151,8 +147,6 @@ pub fn create_profile(input: ProfileInput) -> AppResult<Profile> {
         port: input.port,
         password: input.password,
         method: input.method,
-        plugin: empty_to_none(input.plugin),
-        plugin_opts: empty_to_none(input.plugin_opts),
         created_at: now_secs(),
     })
 }
@@ -164,20 +158,7 @@ pub fn apply_update(profile: &mut Profile, input: ProfileInput) -> AppResult<()>
     profile.port = input.port;
     profile.password = input.password;
     profile.method = input.method;
-    profile.plugin = empty_to_none(input.plugin);
-    profile.plugin_opts = empty_to_none(input.plugin_opts);
     Ok(())
-}
-
-fn empty_to_none(value: Option<String>) -> Option<String> {
-    value.and_then(|v| {
-        let trimmed = v.trim().to_string();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed)
-        }
-    })
 }
 
 fn now_secs() -> i64 {
@@ -199,8 +180,6 @@ mod tests {
             port: 8388,
             password: "pw".into(),
             method: "aes-256-gcm".into(),
-            plugin: None,
-            plugin_opts: None,
         };
         assert!(input.validate().is_err());
     }

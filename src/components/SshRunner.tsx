@@ -7,13 +7,14 @@ import {
   Check,
   ChevronDown,
   ChevronsDown,
+  Download,
   Eye,
   EyeOff,
   Play,
   Server,
 } from "lucide-react";
-import { runSshSample } from "../api";
-import type { ProfileInput, SshAuthMode, SshRunEvent } from "../types";
+import { runInstallerSample, runSshSample } from "../api";
+import type { InstallerRunEvent, ProfileInput, SshAuthMode, SshRunEvent } from "../types";
 
 const PRIVATE_KEY_PATH_KEY = "socks.ssh.privateKeyPath";
 const INSTALLER_STATE_KEY = "socks.ssh.installerState";
@@ -35,15 +36,26 @@ type InstallerState = {
   password: string;
   servicePassword: string;
   method: string;
-  pluginDomain: string;
+};
+
+type ServerInstallerState = {
+  ip: string;
+  port: number;
+  user: string;
+  authMode: SshAuthMode;
+  privateKeyPath: string;
+  password: string;
 };
 
 type SshRunnerProps = {
   ciphers: string[];
+  onInstallProxy: (serverIp: string) => void;
   onAddProfile: (input: ProfileInput) => Promise<void>;
 };
 
-export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
+const SERVER_INSTALLER_STATE_KEY = "socks.serverInstaller.state";
+
+export function SshRunner({ ciphers, onInstallProxy, onAddProfile }: SshRunnerProps) {
   const savedInstallerState = useMemo(() => loadInstallerState(), []);
   const [host, setHost] = useState(savedInstallerState.host ?? "");
   const [port, setPort] = useState(savedInstallerState.port ?? 22);
@@ -61,7 +73,6 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
   const [method, setMethod] = useState(
     savedInstallerState.method ?? ciphers[0] ?? DEFAULT_METHOD,
   );
-  const [pluginDomain, setPluginDomain] = useState(savedInstallerState.pluginDomain ?? "");
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [running, setRunning] = useState(false);
   const [installedProfile, setInstalledProfile] = useState<ProfileInput | null>(null);
@@ -96,7 +107,6 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
         password,
         servicePassword,
         method,
-        pluginDomain,
       } satisfies InstallerState),
     );
   }, [
@@ -104,7 +114,6 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
     host,
     method,
     password,
-    pluginDomain,
     port,
     privateKeyPath,
     servicePassword,
@@ -187,10 +196,9 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
         password: authMode === "password" ? password : null,
         servicePassword,
         method,
-        pluginDomain: pluginDomain.trim() || null,
       });
       if (result.exitStatus === 0) {
-        setInstalledProfile(buildProfileInput(result.pluginCertRaw ?? null));
+        setInstalledProfile(buildProfileInput());
       }
     } catch (err) {
       pushLocalLog("stderr", `\x1b[31m${String(err)}\x1b[0m\n`);
@@ -216,22 +224,14 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
     }
   }
 
-  function buildProfileInput(pluginCertRaw: string | null): ProfileInput {
+  function buildProfileInput(): ProfileInput {
     const server = host.trim();
-    const domain = pluginDomain.trim();
-    const pluginOpts = domain
-      ? pluginCertRaw
-        ? `tls;host=${domain};certRaw=${pluginCertRaw}`
-        : `tls;host=${domain}`
-      : null;
     return {
       name: server.slice(0, 10) || "server",
       server,
       port: 443,
       password: servicePassword,
       method,
-      plugin: domain ? "v2ray-plugin" : null,
-      pluginOpts,
     };
   }
 
@@ -329,18 +329,9 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
             onToggle={() => setServicePasswordVisible((current) => !current)}
           />
         </div>
-
-        <div className="mt-3">
-          <FieldText
-            label="Plugin domain"
-            value={pluginDomain}
-            placeholder="example.com"
-            onChange={setPluginDomain}
-          />
-        </div>
       </div>
 
-      <div className={`grid gap-2 ${installedProfile ? "grid-cols-2" : "grid-cols-1"}`}>
+      <div className={`grid gap-2 ${installedProfile ? "grid-cols-3" : "grid-cols-1"}`}>
         <button
           type="button"
           className="inline-flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-zinc-900 px-4 text-sm font-medium text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
@@ -351,17 +342,242 @@ export function SshRunner({ ciphers, onAddProfile }: SshRunnerProps) {
           {running ? "Running" : "Run installer"}
         </button>
         {installedProfile ? (
-          <button
-            type="button"
-            className="inline-flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 text-sm font-medium text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={handleAddProfile}
-            disabled={addingProfile}
-          >
-            <Server size={16} />
-            {addingProfile ? "Adding" : "Add server"}
-          </button>
+          <>
+            <button
+              type="button"
+              className="inline-flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={() => onInstallProxy(host.trim())}
+              disabled={running || host.trim().length === 0}
+            >
+              <Download size={16} />
+              Install proxy
+            </button>
+            <button
+              type="button"
+              className="inline-flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 text-sm font-medium text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={handleAddProfile}
+              disabled={addingProfile}
+            >
+              <Server size={16} />
+              {addingProfile ? "Adding" : "Add server"}
+            </button>
+          </>
         ) : null}
       </div>
+
+      <div className="relative min-h-64 flex-1 overflow-hidden rounded-xl border border-zinc-800 bg-[#07090d] shadow-2xl shadow-zinc-950/15">
+        <div className="absolute right-2 top-2 z-10">
+          <button
+            type="button"
+            className={`inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border text-zinc-100 opacity-70 backdrop-blur transition hover:opacity-100 ${follow
+              ? "border-emerald-400/25 bg-emerald-400/10"
+              : "border-white/10 bg-white/5 hover:bg-white/10"
+              }`}
+            onClick={enableFollow}
+            aria-label="Follow latest logs"
+            title="Follow latest logs"
+          >
+            <ChevronsDown size={16} />
+          </button>
+        </div>
+        <div className="h-full pb-0 pl-3 pr-1 pt-3">
+          <div className="h-full font-mono text-[12px] leading-5 text-zinc-100">
+            <TerminalOutput
+              logs={logs}
+              follow={follow}
+              terminalRef={terminalRef}
+              onFollowChange={setFollow}
+            />
+          </div>
+        </div>
+      </div>
+      <div className="h-1 shrink-0" />
+    </section>
+  );
+}
+
+export function ServerInstallerRunner({ proxyServerIp }: { proxyServerIp: string }) {
+  const savedState = useMemo(() => loadServerInstallerState(), []);
+  const [ip, setIp] = useState(savedState.ip ?? "");
+  const [port, setPort] = useState(savedState.port ?? 22);
+  const [user, setUser] = useState(savedState.user ?? "root");
+  const [authMode, setAuthMode] = useState<SshAuthMode>(savedState.authMode ?? "key");
+  const [privateKeyPath, setPrivateKeyPath] = useState(
+    savedState.privateKeyPath ?? DEFAULT_PRIVATE_KEY_PATH,
+  );
+  const [password, setPassword] = useState(savedState.password ?? "");
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [running, setRunning] = useState(false);
+  const [follow, setFollow] = useState(true);
+  const terminalRef = useRef<Terminal | null>(null);
+  const runningRef = useRef(false);
+  const nextIdRef = useRef(1);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      SERVER_INSTALLER_STATE_KEY,
+      JSON.stringify({
+        ip,
+        port,
+        user,
+        authMode,
+        privateKeyPath,
+        password,
+      } satisfies ServerInstallerState),
+    );
+  }, [authMode, ip, password, port, privateKeyPath, user]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    listen<InstallerRunEvent>("installer-run", (event) => {
+      setLogs((current) => [
+        ...current,
+        {
+          id: nextIdRef.current++,
+          stream: event.payload.stream,
+          data: event.payload.data,
+        },
+      ]);
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!follow) {
+      return;
+    }
+    terminalRef.current?.scrollToBottom();
+  }, [follow, logs]);
+
+  const canRun = useMemo(() => {
+    if (running) {
+      return false;
+    }
+    if (ip.trim().length === 0 || proxyServerIp.trim().length === 0 || user.trim().length === 0) {
+      return false;
+    }
+    if (authMode === "key") {
+      return privateKeyPath.trim().length > 0;
+    }
+    return password.length > 0;
+  }, [authMode, ip, password, privateKeyPath, proxyServerIp, running, user]);
+
+  async function handleRun() {
+    if (!canRun || runningRef.current) {
+      return;
+    }
+    runningRef.current = true;
+    setLogs([]);
+    setFollow(true);
+    setRunning(true);
+    try {
+      await runInstallerSample({
+        ip: ip.trim(),
+        port,
+        user: user.trim(),
+        privateKeyPath: authMode === "key" ? privateKeyPath.trim() : "",
+        password: authMode === "password" ? password : "",
+        proxyServerIp: proxyServerIp.trim(),
+      });
+    } catch (err) {
+      pushLocalLog("stderr", `\x1b[31m${String(err)}\x1b[0m\n`);
+    } finally {
+      runningRef.current = false;
+      setRunning(false);
+    }
+  }
+
+  function pushLocalLog(stream: SshRunEvent["stream"], data: string) {
+    setLogs((current) => [
+      ...current,
+      {
+        id: nextIdRef.current++,
+        stream,
+        data,
+      },
+    ]);
+  }
+
+  function enableFollow() {
+    setFollow(true);
+    window.requestAnimationFrame(() => terminalRef.current?.scrollToBottom());
+  }
+
+  return (
+    <section className="flex min-h-full flex-1 flex-col gap-3">
+      <div className="rounded-xl border border-zinc-200 bg-white px-4 py-4 shadow-sm">
+        <div>
+          <p className="mb-1.5 text-xs font-medium text-zinc-500">IP / Port</p>
+          <div className="grid grid-cols-[1fr_5rem] gap-2">
+            <input
+              className="h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200"
+              value={ip}
+              placeholder="192.0.2.10"
+              onChange={(event) => setIp(event.target.value)}
+            />
+            <input
+              className="h-10 w-full appearance-none rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+              min={1}
+              max={65535}
+              type="number"
+              value={port}
+              onChange={(event) => setPort(clampPort(event.target.valueAsNumber))}
+            />
+          </div>
+        </div>
+
+        <div className="mt-3 grid grid-cols-[7.5rem_1fr_6.5rem] items-end gap-2">
+          <FieldText label="User" value={user} placeholder="root" onChange={setUser} />
+          <div>
+            <p className="mb-1.5 text-xs font-medium text-zinc-500">
+              {authMode === "key" ? "Private key path" : "SSH password"}
+            </p>
+            {authMode === "key" ? (
+              <input
+                className="h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200"
+                value={privateKeyPath}
+                placeholder="~/.ssh/id_ed25519"
+                onChange={(event) => setPrivateKeyPath(event.target.value)}
+              />
+            ) : (
+              <PasswordInput
+                value={password}
+                visible={passwordVisible}
+                onChange={setPassword}
+                onToggle={() => setPasswordVisible((current) => !current)}
+              />
+            )}
+          </div>
+          <button
+            type="button"
+            className="inline-flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-700 hover:bg-zinc-100"
+            onClick={() => setAuthMode((current) => (current === "key" ? "password" : "key"))}
+          >
+            {authMode === "key" ? "Password" : "Key"}
+          </button>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        className="inline-flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-zinc-900 px-4 text-sm font-medium text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+        onClick={handleRun}
+        disabled={!canRun}
+      >
+        <Play size={16} fill="currentColor" />
+        {running ? "Running" : "Run installer"}
+      </button>
 
       <div className="relative min-h-64 flex-1 overflow-hidden rounded-xl border border-zinc-800 bg-[#07090d] shadow-2xl shadow-zinc-950/15">
         <div className="absolute right-2 top-2 z-10">
@@ -571,7 +787,30 @@ function loadInstallerState(): Partial<InstallerState> {
       servicePassword:
         typeof parsed.servicePassword === "string" ? parsed.servicePassword : undefined,
       method: typeof parsed.method === "string" ? parsed.method : undefined,
-      pluginDomain: typeof parsed.pluginDomain === "string" ? parsed.pluginDomain : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function loadServerInstallerState(): Partial<ServerInstallerState> {
+  const raw = window.localStorage.getItem(SERVER_INSTALLER_STATE_KEY);
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<ServerInstallerState>;
+    return {
+      ip: typeof parsed.ip === "string" ? parsed.ip : undefined,
+      port: typeof parsed.port === "number" ? clampPort(parsed.port) : undefined,
+      user: typeof parsed.user === "string" ? parsed.user : undefined,
+      authMode:
+        parsed.authMode === "key" || parsed.authMode === "password"
+          ? parsed.authMode
+          : undefined,
+      privateKeyPath:
+        typeof parsed.privateKeyPath === "string" ? parsed.privateKeyPath : undefined,
+      password: typeof parsed.password === "string" ? parsed.password : undefined,
     };
   } catch {
     return {};

@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  InstallerRunInput,
+  InstallerRunResult,
   Profile,
   ProfileInput,
   RuntimeStatus,
@@ -46,4 +48,8 @@ export function runtimeStatus() {
 
 export function runSshSample(input: SshRunInput) {
   return invoke<SshRunResult>("run_ssh_sample", { input });
+}
+
+export function runInstallerSample(input: InstallerRunInput) {
+  return invoke<InstallerRunResult>("run_installer_sample", { input });
 }

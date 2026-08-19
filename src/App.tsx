@@ -16,7 +16,7 @@ import { ConfirmDialog } from "./components/ConfirmDialog";
 import { ErrorDialog } from "./components/ErrorDialog";
 import { ProfileCard } from "./components/ProfileCard";
 import { ProfileForm } from "./components/ProfileForm";
-import { SshRunner } from "./components/SshRunner";
+import { ServerInstallerRunner, SshRunner } from "./components/SshRunner";
 import type {
   ConnectivityEvent,
   ConnectivityStatus,
@@ -36,8 +36,6 @@ const MOCK_PROFILES: Profile[] = [
     port: 8388,
     password: "",
     method: "2022-blake3-aes-256-gcm",
-    plugin: null,
-    pluginOpts: null,
     createdAt: 0,
   },
   {
@@ -47,8 +45,6 @@ const MOCK_PROFILES: Profile[] = [
     port: 443,
     password: "",
     method: "chacha20-ietf-poly1305",
-    plugin: null,
-    pluginOpts: null,
     createdAt: 1,
   },
   {
@@ -58,8 +54,6 @@ const MOCK_PROFILES: Profile[] = [
     port: 8443,
     password: "",
     method: "aes-256-gcm",
-    plugin: null,
-    pluginOpts: null,
     createdAt: 2,
   },
   {
@@ -69,8 +63,6 @@ const MOCK_PROFILES: Profile[] = [
     port: 9001,
     password: "",
     method: "2022-blake3-chacha20-poly1305",
-    plugin: null,
-    pluginOpts: null,
     createdAt: 3,
   },
   {
@@ -80,8 +72,6 @@ const MOCK_PROFILES: Profile[] = [
     port: 8388,
     password: "",
     method: "aes-128-gcm",
-    plugin: null,
-    pluginOpts: null,
     createdAt: 4,
   },
   {
@@ -91,14 +81,12 @@ const MOCK_PROFILES: Profile[] = [
     port: 1443,
     password: "",
     method: "xchacha20-ietf-poly1305",
-    plugin: null,
-    pluginOpts: null,
     createdAt: 5,
   },
 ];
 const INITIAL_SAMPLE_SPEED = { up: 42_300, down: 218_900 };
 
-type Page = "profiles" | "ssh";
+type Page = "profiles" | "ssh" | "installer";
 
 function nextSampleSpeed(current: { up: number; down: number }) {
   const up = Math.round(clamp(current.up * randomBetween(0.65, 1.45), 12_000, 76_000));
@@ -161,6 +149,7 @@ export default function App() {
   const [speeds, setSpeeds] = useState<Record<string, { up: number; down: number }>>({});
   const [totals, setTotals] = useState<Record<string, { up: number; down: number }>>({});
   const [connectivity, setConnectivity] = useState<Record<string, ConnectivityStatus>>({});
+  const [proxyServerIp, setProxyServerIp] = useState("");
 
   async function refresh() {
     const [nextProfiles, status, nextCiphers, nextTotals] = await Promise.all([
@@ -301,8 +290,6 @@ export default function App() {
                 port: input.port,
                 password: input.password,
                 method: input.method,
-                plugin: input.plugin?.trim() || null,
-                pluginOpts: input.pluginOpts?.trim() || null,
               }
               : profile,
           ),
@@ -325,6 +312,11 @@ export default function App() {
     await createProfile(input);
     await refresh();
     setPage("profiles");
+  }
+
+  function handleInstallProxy(serverIp: string) {
+    setProxyServerIp(serverIp);
+    setPage("installer");
   }
 
   async function handleToggle(profile: Profile) {
@@ -396,7 +388,32 @@ export default function App() {
   }
 
   function togglePage() {
-    setPage((current) => (current === "profiles" ? "ssh" : "profiles"));
+    setPage((current) => {
+      if (current === "profiles") {
+        return "ssh";
+      }
+      if (current === "ssh") {
+        return "installer";
+      }
+      return "profiles";
+    });
+  }
+
+  function pageTitle() {
+    if (page === "profiles") {
+      return "Shadowsocks client";
+    }
+    if (page === "ssh") {
+      return "Server installer";
+    }
+    return "Proxy installer";
+  }
+
+  function pageVisibilityClass(target: Page) {
+    if (page === target) {
+      return "pointer-events-auto opacity-100";
+    }
+    return "pointer-events-none opacity-0";
   }
 
   useEffect(() => {
@@ -407,12 +424,12 @@ export default function App() {
     <div className="min-h-screen bg-zinc-50 text-zinc-900">
       <header className="fixed inset-x-0 top-0 z-20 border-b border-zinc-200 bg-white/90 backdrop-blur">
         <div
-          className="mx-auto flex max-w-3xl items-center justify-between px-4 py-3"
+          className="mx-auto flex max-w-3xl cursor-pointer items-center justify-between px-4 py-3"
           onClick={togglePage}
         >
           <div className="min-w-0">
             <p className="select-none text-sm font-medium text-zinc-600">
-              {page === "profiles" ? "Shadowsocks client" : "Installer"}
+              {pageTitle()}
             </p>
           </div>
           {page === "profiles" ? (
@@ -433,14 +450,9 @@ export default function App() {
         </div>
       </header>
 
-      <div
-        className={`relative [perspective:1600px] ${page === "ssh" ? "h-screen overflow-hidden" : "min-h-screen"}`}
-      >
+      <div className={`relative ${page !== "profiles" ? "h-screen overflow-hidden" : "min-h-screen"}`}>
         <main
-          className={`${page === "profiles" ? "relative" : "absolute h-screen overflow-hidden"} inset-x-0 top-0 mx-auto flex max-w-3xl flex-col gap-4 px-4 pb-4 pt-[77px] transition duration-700 [backface-visibility:hidden] [transform-style:preserve-3d] ${page === "profiles"
-            ? "pointer-events-auto opacity-100 [transform:rotateY(0deg)]"
-            : "pointer-events-none opacity-0 [transform:rotateY(180deg)]"
-            }`}
+          className={`${page === "profiles" ? "relative" : "absolute h-screen overflow-hidden"} inset-x-0 top-0 mx-auto flex max-w-3xl flex-col gap-4 px-4 pb-4 pt-[77px] transition-opacity duration-300 ${pageVisibilityClass("profiles")}`}
         >
           {sortedProfiles.length === 0 ? (
             <>
@@ -535,12 +547,19 @@ export default function App() {
         </main>
 
         <main
-          className={`${page === "ssh" ? "relative" : "absolute"} inset-x-0 top-0 mx-auto flex h-screen max-w-3xl flex-col overflow-y-auto px-4 pb-6 pt-[77px] transition duration-700 [backface-visibility:hidden] [transform-style:preserve-3d] ${page === "ssh"
-            ? "pointer-events-auto opacity-100 [transform:rotateY(0deg)]"
-            : "pointer-events-none opacity-0 [transform:rotateY(-180deg)]"
-            }`}
+          className={`${page === "ssh" ? "relative" : "absolute"} inset-x-0 top-0 mx-auto flex h-screen max-w-3xl flex-col overflow-y-auto px-4 pb-6 pt-[77px] transition-opacity duration-300 ${pageVisibilityClass("ssh")}`}
         >
-          <SshRunner ciphers={ciphers} onAddProfile={handleAddInstalledProfile} />
+          <SshRunner
+            ciphers={ciphers}
+            onInstallProxy={handleInstallProxy}
+            onAddProfile={handleAddInstalledProfile}
+          />
+        </main>
+
+        <main
+          className={`${page === "installer" ? "relative" : "absolute"} inset-x-0 top-0 mx-auto flex h-screen max-w-3xl flex-col overflow-y-auto px-4 pb-6 pt-[77px] transition-opacity duration-300 ${pageVisibilityClass("installer")}`}
+        >
+          <ServerInstallerRunner proxyServerIp={proxyServerIp} />
         </main>
       </div>
 

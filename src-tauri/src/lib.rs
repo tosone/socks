@@ -1,16 +1,18 @@
 mod error;
 mod outline_config;
 mod password;
-mod profile;
+mod profiles;
+mod proxy_installer;
+mod server_installer;
 mod session;
-mod ssh;
 
 use std::{collections::HashMap, fs};
 
 use error::AppResult;
-use profile::{Profile, ProfileInput, CIPHERS};
+use profiles::{Profile, ProfileInput, CIPHERS};
+use proxy_installer::{InstallerRunInput, InstallerRunResult};
+use server_installer::{SshRunInput, SshRunResult};
 use session::{AppState, RuntimeStatus, TrafficTotals};
-use ssh::{SshRunInput, SshRunResult};
 use tauri::{Manager, RunEvent};
 
 #[tauri::command]
@@ -69,7 +71,15 @@ async fn runtime_status(state: tauri::State<'_, AppState>) -> AppResult<RuntimeS
 
 #[tauri::command]
 async fn run_ssh_sample(app: tauri::AppHandle, input: SshRunInput) -> AppResult<SshRunResult> {
-    ssh::run_sample(app, input).await
+    server_installer::run_sample(app, input).await
+}
+
+#[tauri::command]
+async fn run_installer_sample(
+    app: tauri::AppHandle,
+    input: InstallerRunInput,
+) -> AppResult<InstallerRunResult> {
+    proxy_installer::run_sample(app, input).await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -93,7 +103,8 @@ pub fn run() {
             connect,
             disconnect,
             runtime_status,
-            run_ssh_sample
+            run_ssh_sample,
+            run_installer_sample
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
