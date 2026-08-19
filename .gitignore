@@ -10,6 +10,7 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+target/
 systemd/dist/
 *.tar.gz
 *.local
@@ -24,3 +25,6 @@ systemd/dist/
 *.njsproj
 *.sln
 *.sw?
+
+outline-apps-master.zip
+outline-apps-master/

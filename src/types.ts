@@ -22,12 +22,6 @@ export type ProfileInput = {
 
 export type RuntimeStatus = {
   activeProfileId: string | null;
-  tunName: string | null;
-  helperInstalled: boolean;
-};
-
-export type HelperStatus = {
-  installed: boolean;
 };
 
 export type TrafficTotals = {

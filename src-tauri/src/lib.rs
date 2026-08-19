@@ -1,16 +1,13 @@
 mod error;
-mod helper;
-mod macos_route;
+mod outline_config;
 mod password;
 mod profile;
 mod session;
 mod ssh;
-mod sslocal;
 
 use std::{collections::HashMap, fs};
 
 use error::AppResult;
-use helper::HelperStatus;
 use profile::{Profile, ProfileInput, CIPHERS};
 use session::{AppState, RuntimeStatus, TrafficTotals};
 use ssh::{SshRunInput, SshRunResult};
@@ -71,27 +68,8 @@ async fn runtime_status(state: tauri::State<'_, AppState>) -> AppResult<RuntimeS
 }
 
 #[tauri::command]
-fn helper_status(state: tauri::State<'_, AppState>) -> HelperStatus {
-    state.helper_status()
-}
-
-#[tauri::command]
-fn install_helper(state: tauri::State<'_, AppState>) -> AppResult<HelperStatus> {
-    state.install_helper()
-}
-
-#[tauri::command]
-async fn uninstall_helper(state: tauri::State<'_, AppState>) -> AppResult<HelperStatus> {
-    state.uninstall_helper().await
-}
-
-#[tauri::command]
 async fn run_ssh_sample(app: tauri::AppHandle, input: SshRunInput) -> AppResult<SshRunResult> {
     ssh::run_sample(app, input).await
-}
-
-pub fn run_helper() {
-    helper::run_helper();
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -115,9 +93,6 @@ pub fn run() {
             connect,
             disconnect,
             runtime_status,
-            helper_status,
-            install_helper,
-            uninstall_helper,
             run_ssh_sample
         ])
         .build(tauri::generate_context!())

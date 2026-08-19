@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  HelperStatus,
   Profile,
   ProfileInput,
   RuntimeStatus,
@@ -43,18 +42,6 @@ export function disconnect() {
 
 export function runtimeStatus() {
   return invoke<RuntimeStatus>("runtime_status");
-}
-
-export function helperStatus() {
-  return invoke<HelperStatus>("helper_status");
-}
-
-export function installHelper() {
-  return invoke<HelperStatus>("install_helper");
-}
-
-export function uninstallHelper() {
-  return invoke<HelperStatus>("uninstall_helper");
 }
 
 export function runSshSample(input: SshRunInput) {

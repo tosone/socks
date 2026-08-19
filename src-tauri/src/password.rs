@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use base64::Engine as _;
 use sha2::{Digest, Sha256};
-use shadowsocks_service::shadowsocks::crypto::CipherKind;
+use shadowsocks::crypto::CipherKind;
 
 use crate::error::{AppError, AppResult};
 

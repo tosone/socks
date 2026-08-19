@@ -6,12 +6,10 @@ import {
   createProfile,
   deleteProfile,
   disconnect,
-  installHelper,
   listCiphers,
   listProfiles,
   listTrafficTotals,
   runtimeStatus,
-  uninstallHelper,
   updateProfile,
 } from "./api";
 import { ConfirmDialog } from "./components/ConfirmDialog";
@@ -160,8 +158,6 @@ export default function App() {
   const [deleting, setDeleting] = useState<Profile | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [errorDialog, setErrorDialog] = useState<string | null>(null);
-  const [helperInstalled, setHelperInstalled] = useState(false);
-  const [helperBusy, setHelperBusy] = useState(false);
   const [speeds, setSpeeds] = useState<Record<string, { up: number; down: number }>>({});
   const [totals, setTotals] = useState<Record<string, { up: number; down: number }>>({});
   const [connectivity, setConnectivity] = useState<Record<string, ConnectivityStatus>>({});
@@ -173,7 +169,6 @@ export default function App() {
       listCiphers(),
       listTrafficTotals(),
     ]);
-    setHelperInstalled(status.helperInstalled);
     setProfiles(nextProfiles);
     setActiveId(status.activeProfileId);
     setCiphers(nextCiphers);
@@ -210,7 +205,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (mockProfiles.length === 0) {
+    if (!SHOW_MOCK_PROFILES || mockProfiles.length === 0) {
       return;
     }
 
@@ -280,6 +275,17 @@ export default function App() {
     setFormOpen(true);
   }
 
+  function openEditForm(profile: Profile) {
+    setEditing(profile);
+    setFormError(null);
+    setFormOpen(true);
+  }
+
+  function closeForm() {
+    setFormOpen(false);
+    setEditing(null);
+  }
+
   async function handleSave(input: ProfileInput) {
     setFormBusy(true);
     setFormError(null);
@@ -306,8 +312,7 @@ export default function App() {
       } else {
         await createProfile(input);
       }
-      setFormOpen(false);
-      setEditing(null);
+      closeForm();
       await refresh();
     } catch (err) {
       setFormError(String(err));
@@ -329,7 +334,6 @@ export default function App() {
       if (activeId === profile.id) {
         const status = await disconnect();
         setActiveId(status.activeProfileId);
-        setHelperInstalled(status.helperInstalled);
         setSpeeds((current) => ({ ...current, [profile.id]: { up: 0, down: 0 } }));
         setConnectivity((current) => {
           const next = { ...current };
@@ -340,7 +344,6 @@ export default function App() {
         setConnectivity({ [profile.id]: "checking" });
         const status = await connect(profile.id);
         setActiveId(status.activeProfileId);
-        setHelperInstalled(status.helperInstalled);
         setSpeeds({ [profile.id]: { up: 0, down: 0 } });
       }
     } catch (err) {
@@ -349,7 +352,6 @@ export default function App() {
       const status = await runtimeStatus().catch(() => null);
       if (status) {
         setActiveId(status.activeProfileId);
-        setHelperInstalled(status.helperInstalled);
       }
     } finally {
       setBusyId(null);
@@ -390,32 +392,6 @@ export default function App() {
       setErrorDialog(String(err));
     } finally {
       setDeleteBusy(false);
-    }
-  }
-
-  async function handleInstallHelper() {
-    setHelperBusy(true);
-    setErrorDialog(null);
-    try {
-      const status = await installHelper();
-      setHelperInstalled(status.installed);
-    } catch (err) {
-      setErrorDialog(String(err));
-    } finally {
-      setHelperBusy(false);
-    }
-  }
-
-  async function handleUninstallHelper() {
-    setHelperBusy(true);
-    setErrorDialog(null);
-    try {
-      const status = await uninstallHelper();
-      setHelperInstalled(status.installed);
-    } catch (err) {
-      setErrorDialog(String(err));
-    } finally {
-      setHelperBusy(false);
     }
   }
 
@@ -466,55 +442,6 @@ export default function App() {
             : "pointer-events-none opacity-0 [transform:rotateY(180deg)]"
             }`}
         >
-          <div
-            className={`rounded-xl border px-4 py-3 text-sm ${helperInstalled
-              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-              : "border-amber-200 bg-amber-50 text-amber-900"
-              }`}
-          >
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="font-medium">
-                  {helperInstalled ? "Helper installed" : "Helper required"}
-                </p>
-                <p className="mt-1 text-xs opacity-80">
-                  {helperInstalled
-                    ? "Routes are changed by a background helper. Connecting no longer asks for a password."
-                    : "Install once; future connects skip admin prompts."}
-                </p>
-              </div>
-              {helperInstalled ? (
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    className="cursor-pointer rounded-lg bg-emerald-800 px-3 py-1.5 text-xs text-white hover:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-60"
-                    onClick={handleInstallHelper}
-                    disabled={helperBusy}
-                  >
-                    {helperBusy ? "Working…" : "Reinstall"}
-                  </button>
-                  <button
-                    type="button"
-                    className="cursor-pointer rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
-                    onClick={handleUninstallHelper}
-                    disabled={helperBusy}
-                  >
-                    Uninstall
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  className="cursor-pointer rounded-lg bg-zinc-900 px-3 py-1.5 text-xs text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60"
-                  onClick={handleInstallHelper}
-                  disabled={helperBusy}
-                >
-                  {helperBusy ? "Installing…" : "Install helper"}
-                </button>
-              )}
-            </div>
-          </div>
-
           {sortedProfiles.length === 0 ? (
             <>
               <button
@@ -525,7 +452,7 @@ export default function App() {
                 No profiles yet. Click + to add a Shadowsocks server.
               </button>
               {SHOW_MOCK_PROFILES
-                ? mockProfiles.map((profile, index) => {
+                ? mockProfiles.map((profile) => {
                   const connected = mockActiveId === profile.id;
                   const speed = mockSpeeds[profile.id] ?? { up: 0, down: 0 };
                   const total = mockTotals[profile.id] ?? { up: 0, down: 0 };
@@ -534,14 +461,12 @@ export default function App() {
                     <ProfileCard
                       key={profile.id}
                       profile={profile}
-                      connected={connected}
                       connecting={mockStatus === "checking"}
                       upBps={connected ? speed.up : 0}
                       downBps={connected ? speed.down : 0}
                       totalUpBytes={total.up}
                       totalDownBytes={total.down}
                       connectivityStatus={connected ? mockStatus ?? "checking" : undefined}
-                      menuPlacement={index === mockProfiles.length - 1 ? "up" : "down"}
                       onToggle={() => {
                         setMockActiveId((current) => {
                           if (current === profile.id) {
@@ -574,11 +499,7 @@ export default function App() {
                           return profile.id;
                         });
                       }}
-                      onEdit={() => {
-                        setEditing(profile);
-                        setFormError(null);
-                        setFormOpen(true);
-                      }}
+                      onEdit={() => openEditForm(profile)}
                       onDelete={() => setDeleting(profile)}
                     />
                   );
@@ -586,7 +507,7 @@ export default function App() {
                 : null}
             </>
           ) : (
-            sortedProfiles.map((profile, index) => {
+            sortedProfiles.map((profile) => {
               const connected = activeId === profile.id;
               const speed = speeds[profile.id] ?? { up: 0, down: 0 };
               const total = totals[profile.id] ?? { up: 0, down: 0 };
@@ -594,7 +515,6 @@ export default function App() {
                 <ProfileCard
                   key={profile.id}
                   profile={profile}
-                  connected={connected}
                   connecting={busyId === profile.id}
                   upBps={connected ? speed.up : 0}
                   downBps={connected ? speed.down : 0}
@@ -605,13 +525,8 @@ export default function App() {
                       ? connectivity[profile.id] ?? "checking"
                       : undefined
                   }
-                  menuPlacement={index === sortedProfiles.length - 1 ? "up" : "down"}
                   onToggle={() => handleToggle(profile)}
-                  onEdit={() => {
-                    setEditing(profile);
-                    setFormError(null);
-                    setFormOpen(true);
-                  }}
+                  onEdit={() => openEditForm(profile)}
                   onDelete={() => setDeleting(profile)}
                 />
               );
@@ -637,10 +552,7 @@ export default function App() {
           busy={formBusy}
           error={formError}
           onSubmit={handleSave}
-          onCancel={() => {
-            setFormOpen(false);
-            setEditing(null);
-          }}
+          onCancel={closeForm}
         />
       ) : null}
 
