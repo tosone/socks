@@ -229,7 +229,7 @@ export function SshRunner({ ciphers, onInstallProxy, onAddProfile }: SshRunnerPr
     return {
       name: server.slice(0, 10) || "server",
       server,
-      port: 443,
+      port: 39036,
       password: servicePassword,
       method,
     };

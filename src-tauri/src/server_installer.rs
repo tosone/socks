@@ -12,6 +12,15 @@ use tokio::net::ToSocketAddrs;
 use crate::error::{AppError, AppResult};
 use crate::password;
 
+const SERVER_INSTALL_COMMAND_TEMPLATE: &str = r#"set -eu
+if ! command -v docker >/dev/null 2>&1; then
+  curl -fsSL https://get.docker.com | sh
+fi
+sudo docker pull ghcr.io/tosone/socks-server:latest
+sudo docker rm -f socks-server >/dev/null 2>&1 || true
+sudo docker run -d --name socks-server --restart unless-stopped -p 39036:39036/tcp -e SS_PASSWORD={password} -e SS_METHOD={method} ghcr.io/tosone/socks-server:latest
+sudo docker ps --filter name=socks-server"#;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshRunInput {
@@ -257,16 +266,9 @@ fn install_command(input: &SshRunInput) -> AppResult<String> {
     let password = shell_quote(&password);
     let method = shell_quote(input.method.trim());
 
-    Ok(format!(
-        r#"set -eu
-if ! command -v docker >/dev/null 2>&1; then
-  curl -fsSL https://get.docker.com | sh
-fi
-sudo docker pull ghcr.io/tosone/socks:latest
-sudo docker rm -f socks-server >/dev/null 2>&1 || true
-sudo docker run -d --name socks-server --restart unless-stopped -p 443:443/tcp -e SS_PASSWORD={password} -e SS_METHOD={method} ghcr.io/tosone/socks:latest
-sudo docker ps --filter name=socks-server"#
-    ))
+    Ok(SERVER_INSTALL_COMMAND_TEMPLATE
+        .replace("{password}", &password)
+        .replace("{method}", &method))
 }
 
 fn shell_quote(value: &str) -> String {

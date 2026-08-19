@@ -38,9 +38,10 @@ normalize_ss_password() {
 
 ss_method="${SS_METHOD:-2022-blake3-chacha20-poly1305}"
 ss_password="$(normalize_ss_password "$ss_method" "${SS_PASSWORD:-change-me}")"
+ss_port="${SS_PORT:-39036}"
 
 cat > /etc/shadowsocks-rust/config.json <<EOF_CONFIG
-{"server":"0.0.0.0","server_port":443,"password":"${ss_password}","timeout":300,"method":"${ss_method}"}
+{"server":"0.0.0.0","server_port":${ss_port},"password":"${ss_password}","timeout":300,"method":"${ss_method}"}
 EOF_CONFIG
 
 exec "$@"

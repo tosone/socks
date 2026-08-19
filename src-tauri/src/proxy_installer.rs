@@ -5,12 +5,14 @@ use tauri::{AppHandle, Emitter};
 
 use crate::error::{AppError, AppResult};
 
-const PROXY_INSTALL_COMMANDS: &[&str] = &[
-    "echo Preparing remote environment",
-    "echo Installing server dependencies",
-    "echo Writing service configuration",
-    "echo Installer placeholder completed",
-];
+const PROXY_INSTALL_COMMAND_TEMPLATE: &str = r#"set -eu
+if ! command -v docker >/dev/null 2>&1; then
+  curl -fsSL https://get.docker.com | sh -s -- --mirror Aliyun
+fi
+sudo docker pull ghcr.io/tosone/socks-proxy:latest
+sudo docker rm -f socks-proxy >/dev/null 2>&1 || true
+sudo docker run -d --name socks-proxy --restart unless-stopped -p 39036:39036/tcp -p 39036:39036/udp -e SHADOWSOCKS_SERVER={proxy_server_ip} -e SHADOWSOCKS_PORT=39036 ghcr.io/tosone/socks-proxy:latest
+sudo docker ps --filter name=socks-proxy"#;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,7 +65,8 @@ pub async fn run_sample(app: AppHandle, input: InstallerRunInput) -> AppResult<I
         "Starting installer placeholder\n",
     );
 
-    let mut lines = vec![
+    let command = install_command(&input);
+    let lines = [
         format!(
             "echo Connecting to {}:{} as {}\n",
             input.ip.trim(),
@@ -74,12 +77,8 @@ pub async fn run_sample(app: AppHandle, input: InstallerRunInput) -> AppResult<I
             "echo Configuring Shadowsocks proxy for {}\n",
             input.proxy_server_ip.trim()
         ),
+        command,
     ];
-    lines.extend(
-        PROXY_INSTALL_COMMANDS
-            .iter()
-            .map(|command| format!("{command}\n")),
-    );
 
     for line in lines {
         emit_log(&app, InstallerLogStream::Stdout, line);
@@ -89,6 +88,17 @@ pub async fn run_sample(app: AppHandle, input: InstallerRunInput) -> AppResult<I
     Ok(InstallerRunResult {
         exit_status: Some(0),
     })
+}
+
+fn install_command(input: &InstallerRunInput) -> String {
+    PROXY_INSTALL_COMMAND_TEMPLATE.replace(
+        "{proxy_server_ip}",
+        &shell_quote(input.proxy_server_ip.trim()),
+    )
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn emit_log(app: &AppHandle, stream: InstallerLogStream, data: impl Into<String>) {

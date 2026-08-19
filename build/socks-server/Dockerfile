@@ -32,11 +32,11 @@ COPY build/socks-server/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/ssserver
 
-EXPOSE 443/tcp
+EXPOSE 39036/tcp
 
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["ssserver", "--log-without-time", "-a", "nobody", "-c", "/etc/shadowsocks-rust/config.json"]
 
-# sslocal -b 127.0.0.1:1080 -s example.com:443 -m "$SS_METHOD" -k "$SS_PASSWORD"
+# sslocal -b 127.0.0.1:1080 -s example.com:39036 -m "$SS_METHOD" -k "$SS_PASSWORD"
 # docker buildx build --platform linux/amd64,linux/arm64 -f build/socks-server/Dockerfile -t socks-server:latest .
-# docker run --rm -e SS_PASSWORD=change-me -e SS_METHOD=2022-blake3-chacha20-poly1305 -p 443:443/tcp socks-server:latest
+# docker run --rm -e SS_PASSWORD=change-me -e SS_METHOD=2022-blake3-chacha20-poly1305 -p 39036:39036/tcp socks-server:latest

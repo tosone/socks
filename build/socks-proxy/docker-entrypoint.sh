@@ -3,7 +3,7 @@ set -eu
 
 generate_stream_conf() {
   : "${SHADOWSOCKS_SERVER:?SHADOWSOCKS_SERVER is required.}"
-  shadowsocks_port="${SHADOWSOCKS_PORT:-443}"
+  shadowsocks_port="${SHADOWSOCKS_PORT:-39036}"
 
   cat <<EOF
 stream {
