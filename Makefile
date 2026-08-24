@@ -12,6 +12,7 @@ VPN_EXTENSION_OUT_DIR ?= $(ROOT_DIR)/target/extensions/vpn
 VPN_MODULE_NAME ?= SocksTunnelExtension
 VPN_PRODUCT_NAME ?= SocksTunnelExtension
 VPN_BUNDLE_ID ?= com.tosone.socks.SocksTunnelExtension
+VPN_APP_ENTITLEMENTS ?= $(VPN_DIR)/App.entitlements
 VPN_VERSION ?= 0.1.0
 VPN_BUILD ?= 1
 VPN_CODESIGN_IDENTITY ?= -
@@ -116,7 +117,8 @@ extension-embed:
 	fi; \
 	mkdir -p "$(TAURI_APP_BUNDLE)/Contents/PlugIns"; \
 	rm -rf "$(TAURI_APP_BUNDLE)/Contents/PlugIns/$$(basename "$$appex")"; \
-	cp -R "$$appex" "$(TAURI_APP_BUNDLE)/Contents/PlugIns/"
+	cp -R "$$appex" "$(TAURI_APP_BUNDLE)/Contents/PlugIns/"; \
+	codesign --force --sign "$(VPN_CODESIGN_IDENTITY)" --timestamp=none --entitlements "$(VPN_APP_ENTITLEMENTS)" "$(TAURI_APP_BUNDLE)"
 
 tauri: extension
 	bun run tauri build
