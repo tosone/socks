@@ -10,6 +10,7 @@ use tokio::task::JoinHandle;
 
 use crate::error::{AppError, AppResult};
 use crate::outline_config;
+use crate::packet_tunnel;
 use crate::profiles::{self, Profile, ProfileInput};
 
 const CONNECTIVITY_ATTEMPTS: usize = 3;
@@ -177,6 +178,7 @@ impl AppState {
         let mut session = self.session.lock().await;
         if let Some(current) = session.take() {
             current.connectivity_task.abort();
+            let stop_result = stop_packet_tunnel(&current.profile_id).await;
             if let Some(total) = self
                 .traffic_totals
                 .lock()
@@ -186,6 +188,7 @@ impl AppState {
             {
                 save_traffic_totals(&self.data_dir, &current.profile_id, &total)?;
             }
+            stop_result?;
         }
         drop(session);
         Ok(self.runtime_status().await)
@@ -205,9 +208,11 @@ impl AppState {
 }
 
 async fn start_packet_tunnel(_profile: &Profile, _transport_config: &str) -> AppResult<()> {
-    Err(AppError::msg(
-        "Packet Tunnel backend is not wired yet. The legacy helper TUN/route/DNS path has been removed.",
-    ))
+    packet_tunnel::start(_profile, _transport_config)
+}
+
+async fn stop_packet_tunnel(profile_id: &str) -> AppResult<()> {
+    packet_tunnel::stop(profile_id)
 }
 
 fn spawn_connectivity_check(app: AppHandle, profile_id: String) -> JoinHandle<()> {

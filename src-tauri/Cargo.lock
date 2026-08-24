@@ -4790,6 +4790,7 @@ name = "socks"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "cc",
  "reqwest 0.12.28",
  "russh",
  "serde",

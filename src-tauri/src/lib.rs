@@ -1,5 +1,6 @@
 mod error;
 mod outline_config;
+mod packet_tunnel;
 mod password;
 mod profiles;
 mod proxy_installer;
