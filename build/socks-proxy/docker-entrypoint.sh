@@ -3,26 +3,35 @@ set -eu
 
 generate_stream_conf() {
   : "${SHADOWSOCKS_SERVER:?SHADOWSOCKS_SERVER is required.}"
-  shadowsocks_port="${SHADOWSOCKS_PORT:-39036}"
+  shadowsocks_ports=$(printf '%s' "${SHADOWSOCKS_PORT:-39036}" | tr ',"' '  ')
+  shadowsocks_servers=$(printf '%s' "$SHADOWSOCKS_SERVER" | tr -d '"')
 
   cat <<EOF
 stream {
-	upstream group {
 EOF
 
-  for server in $(printf '%s' "$SHADOWSOCKS_SERVER" | tr -d '"'); do
+  for port in $shadowsocks_ports; do
     cat <<EOF
-		server $server:$shadowsocks_port;
+	upstream group_$port {
+EOF
+
+    for server in $shadowsocks_servers; do
+      cat <<EOF
+		server $server:$port;
+EOF
+    done
+
+    cat <<EOF
+	}
+	server {
+		listen $port;
+		listen $port udp;
+		proxy_pass group_$port;
+	}
 EOF
   done
 
   cat <<EOF
-	}
-	server {
-		listen $shadowsocks_port;
-		listen $shadowsocks_port udp;
-		proxy_pass group;
-	}
 }
 EOF
 }
