@@ -1,10 +1,51 @@
-import { useState } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 import { CircleAlert, CircleCheck, Pencil, Trash2 } from "lucide-react";
 import type { ConnectivityStatus, Profile } from "../types";
+
+const CORNER_RADIUS = 16; // rounded-2xl
+// Cyberpunk-ish neon: light green bleeding into violet and fuchsia.
+const BORDER_GRADIENT_STOPS = [
+  { offset: "0%", color: "#6ee7b7" }, // emerald-300
+  { offset: "50%", color: "#a78bfa" }, // violet-400
+  { offset: "100%", color: "#e879f9" }, // fuchsia-400
+];
+const BORDER_GLOW =
+  "drop-shadow(0 0 2px rgba(110, 231, 183, 0.85)) drop-shadow(0 0 6px rgba(168, 85, 247, 0.6)) drop-shadow(0 0 14px rgba(232, 121, 249, 0.35))";
+const HALF_DURATION = 520; // top/bottom edges draw from the center outwards
+const SIDE_DURATION = 420; // then the left/right edges wrap around
+const SIDE_DELAY = 460;
+
+/** Rounded-rectangle outline split into "halves" (top/bottom, drawn from the
+ *  center) and "sides" (left/right, drawn afterwards to close the border). */
+function borderGeometry(width: number, height: number) {
+  const r = Math.min(CORNER_RADIUS, width / 2, height / 2);
+  const halves = [
+    `M ${width / 2} 0 L ${width - r} 0 A ${r} ${r} 0 0 1 ${width} ${r}`,
+    `M ${width / 2} 0 L ${r} 0 A ${r} ${r} 0 0 0 0 ${r}`,
+    `M ${width / 2} ${height} L ${width - r} ${height} A ${r} ${r} 0 0 0 ${width} ${height - r}`,
+    `M ${width / 2} ${height} L ${r} ${height} A ${r} ${r} 0 0 1 0 ${height - r}`,
+  ];
+  // Split each vertical side so both ends draw towards the middle and finish
+  // there, instead of running straight from top to bottom.
+  const middle = height / 2;
+  const sides = [
+    `M 0 ${r} L 0 ${middle}`,
+    `M 0 ${height - r} L 0 ${middle}`,
+    `M ${width} ${r} L ${width} ${middle}`,
+    `M ${width} ${height - r} L ${width} ${middle}`,
+  ];
+  return {
+    halves,
+    sides,
+    halfLength: Math.max(0, width / 2 - r) + (Math.PI * r) / 2,
+    sideLength: Math.max(0, middle - r),
+  };
+}
 
 type ProfileCardProps = {
   profile: Profile;
   connecting: boolean;
+  connected: boolean;
   upBps: number;
   downBps: number;
   totalUpBytes: number;
@@ -18,6 +59,7 @@ type ProfileCardProps = {
 export function ProfileCard({
   profile,
   connecting,
+  connected,
   upBps,
   downBps,
   totalUpBytes,
@@ -28,16 +70,121 @@ export function ProfileCard({
   onDelete,
 }: ProfileCardProps) {
   const [showTotals, setShowTotals] = useState(false);
+  const revealed = connected || connecting;
+  const gradientId = `profile-border-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
+  const articleRef = useRef<HTMLElement | null>(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+
+  useLayoutEffect(() => {
+    const node = articleRef.current;
+    if (!node) {
+      return;
+    }
+    const measure = () => {
+      const width = node.offsetWidth;
+      const height = node.offsetHeight;
+      setSize((current) =>
+        current.width === width && current.height === height ? current : { width, height },
+      );
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  const border =
+    size.width > 0 && size.height > 0 ? borderGeometry(size.width, size.height) : null;
 
   return (
     <article
-      className="relative flex min-h-40 cursor-pointer rounded-2xl border border-zinc-200 bg-white px-4 pb-2.5 pt-5 shadow-sm"
+      ref={articleRef}
+      className="relative flex min-h-40 cursor-pointer rounded-2xl bg-white px-4 pb-2.5 pt-5 shadow-sm"
+      style={{
+        boxShadow: revealed
+          ? "0 0 0 1px rgba(167, 139, 250, 0.35), 0 12px 32px -12px rgba(110, 231, 183, 0.55), 0 8px 28px -10px rgba(168, 85, 247, 0.5)"
+          : undefined,
+        transition: "box-shadow 700ms ease-out",
+      }}
       onDoubleClick={() => {
         if (!connecting) {
           onToggle();
         }
       }}
     >
+      {border ? (
+        <svg
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 overflow-visible"
+          width={size.width}
+          height={size.height}
+          viewBox={`0 0 ${size.width} ${size.height}`}
+          fill="none"
+        >
+          <defs>
+            <linearGradient
+              id={gradientId}
+              gradientUnits="userSpaceOnUse"
+              x1={0}
+              y1={0}
+              x2={size.width}
+              y2={size.height}
+            >
+              {BORDER_GRADIENT_STOPS.map((stop) => (
+                <stop key={stop.offset} offset={stop.offset} stopColor={stop.color} />
+              ))}
+            </linearGradient>
+          </defs>
+          <rect
+            x={0.5}
+            y={0.5}
+            width={size.width - 1}
+            height={size.height - 1}
+            rx={CORNER_RADIUS - 0.5}
+            stroke="#e4e4e7"
+            strokeWidth={1}
+          />
+          <g
+            style={{
+              filter: revealed ? BORDER_GLOW : undefined,
+              transition: "filter 500ms ease-out",
+            }}
+          >
+            {border.halves.map((d, index) => (
+              <path
+                key={`half-${index}`}
+                d={d}
+                stroke={`url(#${gradientId})`}
+                strokeWidth={2}
+                strokeLinecap="round"
+                style={{
+                  strokeDasharray: border.halfLength,
+                  strokeDashoffset: revealed ? 0 : border.halfLength,
+                  transition: `stroke-dashoffset ${HALF_DURATION}ms ease-out ${
+                    revealed ? 0 : SIDE_DURATION
+                  }ms`,
+                }}
+              />
+            ))}
+            {border.sides.map((d, index) => (
+              <path
+                key={`side-${index}`}
+                d={d}
+                stroke={`url(#${gradientId})`}
+                strokeWidth={2}
+                strokeLinecap="round"
+                style={{
+                  strokeDasharray: border.sideLength,
+                  strokeDashoffset: revealed ? 0 : border.sideLength,
+                  transition: `stroke-dashoffset ${SIDE_DURATION}ms ease-out ${
+                    revealed ? SIDE_DELAY : 0
+                  }ms`,
+                }}
+              />
+            ))}
+          </g>
+        </svg>
+      ) : null}
       <div className="relative z-10 flex flex-1 flex-col justify-between gap-4">
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
