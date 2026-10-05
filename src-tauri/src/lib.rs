@@ -5,6 +5,7 @@ mod password;
 mod profiles;
 mod shared;
 mod traffic;
+mod tray;
 mod proxy_installer;
 mod server_installer;
 mod session;
@@ -48,8 +49,15 @@ async fn update_profile(
 }
 
 #[tauri::command]
-async fn delete_profile(state: tauri::State<'_, AppState>, id: String) -> AppResult<()> {
-    state.delete_profile(&id).await
+async fn delete_profile(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> AppResult<()> {
+    state.delete_profile(&id).await?;
+    let status = state.runtime_status().await;
+    tray::apply(&app, status.active_profile_id.is_some());
+    Ok(())
 }
 
 #[tauri::command]
@@ -58,13 +66,24 @@ fn list_ciphers() -> Vec<String> {
 }
 
 #[tauri::command]
-async fn connect(state: tauri::State<'_, AppState>, id: String) -> AppResult<RuntimeStatus> {
-    state.connect(&id).await
+async fn connect(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> AppResult<RuntimeStatus> {
+    let status = state.connect(&id).await?;
+    tray::apply(&app, status.active_profile_id.is_some());
+    Ok(status)
 }
 
 #[tauri::command]
-async fn disconnect(state: tauri::State<'_, AppState>) -> AppResult<RuntimeStatus> {
-    state.disconnect().await
+async fn disconnect(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> AppResult<RuntimeStatus> {
+    let status = state.disconnect().await?;
+    tray::apply(&app, status.active_profile_id.is_some());
+    Ok(status)
 }
 
 #[tauri::command]
@@ -94,6 +113,19 @@ pub fn run() {
             fs::create_dir_all(&data_dir)?;
             let state = AppState::load(data_dir, app.handle().clone())?;
             app.manage(state);
+            tray::build(app.handle())?;
+
+            // Closing the window keeps the app running in the menu bar; use
+            // the tray's "打开" item to bring it back (or quit to exit).
+            if let Some(window) = app.get_webview_window("main") {
+                let window_to_hide = window.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = window_to_hide.hide();
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -112,10 +144,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    app.run(|app, event| {
-        if let RunEvent::Exit = event {
+    app.run(|app, event| match event {
+        RunEvent::Reopen { .. } => tray::show_main_window(app),
+        RunEvent::Exit => {
             let state = app.state::<AppState>();
             tauri::async_runtime::block_on(state.shutdown());
         }
+        _ => {}
     });
 }

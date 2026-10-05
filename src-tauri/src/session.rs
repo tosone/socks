@@ -61,6 +61,7 @@ pub struct AppState {
     profiles: Mutex<Vec<Profile>>,
     traffic_totals: Arc<Mutex<HashMap<String, TrafficTotals>>>,
     session: Mutex<Option<RuntimeSession>>,
+    last_active_id: Mutex<Option<String>>,
 }
 
 impl AppState {
@@ -81,6 +82,7 @@ impl AppState {
             profiles: Mutex::new(profiles),
             traffic_totals: Arc::new(Mutex::new(traffic_totals)),
             session: Mutex::new(None),
+            last_active_id: Mutex::new(None),
         })
     }
 
@@ -181,6 +183,7 @@ impl AppState {
             None => None,
         };
 
+        let active_id = profile.id.clone();
         let mut session = self.session.lock().await;
         *session = Some(RuntimeSession {
             profile_id: profile.id,
@@ -188,6 +191,7 @@ impl AppState {
             traffic_task,
         });
         drop(session);
+        *self.last_active_id.lock().await = Some(active_id);
         Ok(self.runtime_status().await)
     }
 
@@ -218,12 +222,17 @@ impl AppState {
         let _ = self.disconnect().await;
     }
 
-    async fn active_id(&self) -> Option<String> {
+    pub async fn active_id(&self) -> Option<String> {
         self.session
             .lock()
             .await
             .as_ref()
             .map(|s| s.profile_id.clone())
+    }
+
+    /// Last profile that was connected, so the tray can reconnect it when idle.
+    pub async fn last_active_id(&self) -> Option<String> {
+        self.last_active_id.lock().await.clone()
     }
 }
 
