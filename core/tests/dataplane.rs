@@ -19,6 +19,8 @@ use std::{
 use socks_core::{SocksPacket, socks_core_notify_network_changed, socks_core_push, socks_core_start, socks_core_stop};
 
 static OUTBOUND: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+/// JSON events emitted by the core, as strings.
+static EVENTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 unsafe extern "C" fn record_send(packets: *const SocksPacket, count: usize, _ctx: *mut c_void) {
     if packets.is_null() {
@@ -34,7 +36,15 @@ unsafe extern "C" fn record_send(packets: *const SocksPacket, count: usize, _ctx
     }
 }
 
-unsafe extern "C" fn ignore_event(_event_json: *const c_char, _ctx: *mut c_void) {}
+unsafe extern "C" fn record_event(event_json: *const c_char, _ctx: *mut c_void) {
+    if event_json.is_null() {
+        return;
+    }
+    let event = std::ffi::CStr::from_ptr(event_json)
+        .to_string_lossy()
+        .into_owned();
+    EVENTS.lock().unwrap().push(event);
+}
 
 fn checksum(data: &[u8]) -> u16 {
     let mut sum = 0u32;
@@ -141,7 +151,7 @@ fn pushed_syn_connects_to_the_shadowsocks_server() {
             netmask.as_ptr(),
             log_dir_c.as_ptr(),
             record_send,
-            ignore_event,
+            record_event,
             ptr::null_mut(),
             error.as_mut_ptr(),
             error.len(),
@@ -196,6 +206,22 @@ fn pushed_syn_connects_to_the_shadowsocks_server() {
     assert!(
         accepted.load(Ordering::SeqCst) >= 2,
         "the core did not come back up after the network change"
+    );
+
+    // The core reports byte counts every second; wait for the tick after the
+    // exchanged packets so both directions are non-zero.
+    std::thread::sleep(Duration::from_millis(1_300));
+    let traffic = EVENTS
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|event| serde_json::from_str::<serde_json::Value>(event).ok())
+        .filter(|value| value["type"] == "traffic")
+        .filter_map(|value| Some((value["tx"].as_u64()?, value["rx"].as_u64()?)))
+        .collect::<Vec<_>>();
+    assert!(
+        traffic.iter().any(|(tx, rx)| *tx > 0 && *rx > 0),
+        "expected a traffic event with both directions counted, got {traffic:?}"
     );
 
     socks_core_stop();

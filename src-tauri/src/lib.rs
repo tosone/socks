@@ -3,6 +3,8 @@ mod error;
 mod packet_tunnel;
 mod password;
 mod profiles;
+mod shared;
+mod traffic;
 mod proxy_installer;
 mod server_installer;
 mod session;

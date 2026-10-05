@@ -17,6 +17,7 @@ mod config;
 mod device;
 mod engine;
 mod logging;
+mod traffic;
 
 use std::{
     os::raw::{c_char, c_int, c_void},

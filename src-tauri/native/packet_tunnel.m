@@ -176,3 +176,31 @@ int32_t socks_packet_tunnel_stop(const char *tunnel_id,
     return 0;
   }
 }
+
+static NSString *const SocksAppGroupIdentifier = @"group.com.tosone.socks";
+
+// Writes the App Group container path into `buffer` and returns 0, or returns
+// non-zero (leaving an empty string) when the group is unavailable. The app is
+// sandboxed, so this is the only reliable way to reach the container it shares
+// with the extension.
+int32_t socks_shared_container_path(char *buffer, uintptr_t buffer_len) {
+  if (buffer == NULL || buffer_len == 0) {
+    return 1;
+  }
+
+  NSURL *container = [[NSFileManager defaultManager]
+      containerURLForSecurityApplicationGroupIdentifier:SocksAppGroupIdentifier];
+  if (container == nil) {
+    buffer[0] = '\0';
+    return 1;
+  }
+
+  const char *path = container.fileSystemRepresentation;
+  if (path == NULL) {
+    buffer[0] = '\0';
+    return 1;
+  }
+
+  strlcpy(buffer, path, buffer_len);
+  return 0;
+}

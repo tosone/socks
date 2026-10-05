@@ -13,6 +13,7 @@ use std::{
     net::IpAddr,
     os::raw::{c_char, c_void},
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
 };
 
@@ -22,6 +23,8 @@ use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     sync::mpsc,
 };
+
+use crate::traffic::TrafficCounters;
 
 /// One raw IP packet, as seen by the native side.
 #[repr(C)]
@@ -46,24 +49,27 @@ pub type SocksEventFn = unsafe extern "C" fn(event_json: *const c_char, ctx: *mu
 ///
 /// The caller guarantees that `ctx` stays valid until the core is stopped and
 /// that the callback itself is safe to call from any thread.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct SendCallback {
     f: SocksSendFn,
     ctx: *mut c_void,
+    counters: Arc<TrafficCounters>,
 }
 
 unsafe impl Send for SendCallback {}
 unsafe impl Sync for SendCallback {}
 
 impl SendCallback {
-    pub(crate) fn new(f: SocksSendFn, ctx: *mut c_void) -> Self {
-        Self { f, ctx }
+    pub(crate) fn new(f: SocksSendFn, ctx: *mut c_void, counters: Arc<TrafficCounters>) -> Self {
+        Self { f, ctx, counters }
     }
 
     pub(crate) fn send(&self, packet: &[u8]) {
         if packet.is_empty() {
             return;
         }
+        // These are the bytes handed back to the tunnel, i.e. the download side.
+        self.counters.add_rx(packet.len() as u64);
         let c_packet = SocksPacket {
             data: packet.as_ptr(),
             len: packet.len(),
@@ -206,7 +212,7 @@ mod tests {
             IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
             IpAddr::V4(Ipv4Addr::new(255, 255, 255, 0)),
             rx,
-            SendCallback::new(send, std::ptr::null_mut()),
+            SendCallback::new(send, std::ptr::null_mut(), Arc::default()),
         );
 
         tx.send(Bytes::from_static(&[1, 2, 3])).unwrap();
@@ -227,7 +233,7 @@ mod tests {
             IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             rx,
-            SendCallback::new(send, std::ptr::null_mut()),
+            SendCallback::new(send, std::ptr::null_mut(), Arc::default()),
         );
 
         tx.send(Bytes::from_static(&[1, 2, 3, 4])).unwrap();

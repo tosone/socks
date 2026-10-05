@@ -237,8 +237,12 @@ private final class RustRelay {
   private let tunnelAddress: String
   private let subnetMask: String
   private let packetFlow: NEPacketTunnelFlow
-  /// Directory for the rolling data plane log, or nil to log to memory only.
-  private let logDirectory: URL?
+  /// Root directory shared with the host app.
+  ///
+  /// The App Group is preferred so the host app (and the user) can read what the
+  /// extension writes; the extension's own Library directory is the fallback
+  /// when the group is not available.
+  private let sharedDirectory: URL?
   private var running = false
 
   init(configJSON: String, tunnelAddress: String, subnetMask: String, packetFlow: NEPacketTunnelFlow) {
@@ -246,21 +250,69 @@ private final class RustRelay {
     self.tunnelAddress = tunnelAddress
     self.subnetMask = subnetMask
     self.packetFlow = packetFlow
-    self.logDirectory = Self.defaultLogDirectory()
+    self.sharedDirectory = Self.defaultSharedDirectory()
   }
 
-  /// Directory for the rolling data plane log.
-  ///
-  /// The App Group is preferred so the host app (and the user) can read it; the
-  /// extension's own Library directory is the fallback when the group is not
-  /// available. The core creates the directory itself.
-  private static func defaultLogDirectory() -> URL? {
+  /// `<shared>/Logs`, handed to the core's rolling logger.
+  private var logDirectory: URL? {
+    sharedDirectory?.appendingPathComponent("Logs", isDirectory: true)
+  }
+
+  /// `<shared>/traffic.json`, polled by the host app.
+  private var trafficFile: URL? {
+    sharedDirectory?.appendingPathComponent(trafficFileName)
+  }
+
+  private static func defaultSharedDirectory() -> URL? {
     let fileManager = FileManager.default
     if let group = fileManager.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier) {
-      return group.appendingPathComponent("Logs", isDirectory: true)
+      return group
     }
-    return fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first?
-      .appendingPathComponent("Logs", isDirectory: true)
+    return fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first
+  }
+
+  /// Events the core emits: `status`, `traffic` and `error`.
+  ///
+  /// `traffic` carries the tunnel byte counters and is forwarded to the host app
+  /// through the shared file; everything else is only logged for now.
+  func handleEvent(_ json: String) {
+    NSLog("[socks-core] %@", json)
+
+    guard let data = json.data(using: .utf8),
+      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+      let type = object["type"] as? String,
+      type == "traffic"
+    else {
+      return
+    }
+
+    let tx = (object["tx"] as? NSNumber)?.uint64Value ?? 0
+    let rx = (object["rx"] as? NSNumber)?.uint64Value ?? 0
+    publishTraffic(tx: tx, rx: rx)
+  }
+
+  /// Write the byte counters for the host app to poll.
+  ///
+  /// `.atomic` writes to a temporary file and renames it, so the reader can
+  /// never observe a half-written document. The timestamp lets the app tell a
+  /// live tunnel apart from a stale file left behind by a killed extension.
+  private func publishTraffic(tx: UInt64, rx: UInt64) {
+    guard let trafficFile else {
+      return
+    }
+    let payload: [String: Any] = [
+      "tx": tx,
+      "rx": rx,
+      "updatedAtMs": Int(Date().timeIntervalSince1970 * 1000),
+    ]
+    guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
+      return
+    }
+    do {
+      try data.write(to: trafficFile, options: .atomic)
+    } catch {
+      NSLog("[socks] failed to publish traffic stats: %@", error.localizedDescription)
+    }
   }
 
   func start() throws {
@@ -398,11 +450,11 @@ private func socksCoreSend(
 
 /// Must match `SocksEventFn` in `socks_core.h`.
 private func socksCoreEvent(_ eventJSON: UnsafePointer<CChar>?, _ context: UnsafeMutableRawPointer?) {
-  guard let eventJSON else {
+  guard let eventJSON, let context else {
     return
   }
-  let message = String(cString: eventJSON)
-  NSLog("[socks-core] %@", message)
+  let relay = Unmanaged<RustRelay>.fromOpaque(context).takeUnretainedValue()
+  relay.handleEvent(String(cString: eventJSON))
 }
 
 enum TunnelProviderError: LocalizedError {
@@ -463,6 +515,9 @@ private func excludedIpv4Routes() -> [NEIPv4Route] {
 
 /// App Group shared with the host app, declared in both entitlements files.
 private let appGroupIdentifier = "group.com.tosone.socks"
+
+/// Byte counters published by the extension for the host app to read.
+private let trafficFileName = "traffic.json"
 
 /// IPv6 address of the tunnel interface.
 ///

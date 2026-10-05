@@ -21,6 +21,7 @@ use tokio::{runtime::Runtime, sync::mpsc};
 use crate::{
     config::StartConfig,
     device::{EventCallback, SendCallback, SocksEventFn, SocksPacket, SocksSendFn, VirtualDevice},
+    traffic::TrafficCounters,
 };
 
 /// Everything needed to bring the data plane back up after a network change.
@@ -49,6 +50,8 @@ struct Engine {
     /// Set by [`stop`] so the tun task can tell a deliberate shutdown apart from
     /// a real failure and skip the error log/event.
     shutdown: Arc<AtomicBool>,
+    /// Tunnel byte counters shared with the device's send path.
+    counters: Arc<TrafficCounters>,
 }
 
 /// Only one tunnel can run at a time, and the FFI calls are synchronous.
@@ -93,7 +96,13 @@ pub(crate) fn start(
         .map_err(|err| format!("failed to create runtime: {err}"))?;
 
     let (tx, rx) = mpsc::unbounded_channel();
-    let device = VirtualDevice::new(address, netmask, rx, SendCallback::new(send, ctx));
+    let counters = Arc::new(TrafficCounters::default());
+    let device = VirtualDevice::new(
+        address,
+        netmask,
+        rx,
+        SendCallback::new(send, ctx, counters.clone()),
+    );
 
     let udp_timeout = config.udp_timeout.map(Duration::from_secs);
     let udp_capacity = config.udp_max_associations;
@@ -140,6 +149,19 @@ pub(crate) fn start(
         }
     });
 
+    // Report the tunnel byte counts once a second, including when idle, so the
+    // host can show live speed and totals without polling across the ABI.
+    let report_counters = counters.clone();
+    runtime.spawn(async move {
+        let mut ticker = tokio::time::interval(TRAFFIC_INTERVAL);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+            let (tx, rx) = report_counters.snapshot();
+            events.emit(&traffic_event(tx, rx));
+        }
+    });
+
     events.emit(&status_event("started"));
 
     let mut guard = ENGINE.lock().map_err(|_| "core state is poisoned".to_owned())?;
@@ -157,6 +179,7 @@ pub(crate) fn start(
             ctx,
         },
         shutdown,
+        counters,
     });
     Ok(())
 }
@@ -204,6 +227,9 @@ pub(crate) unsafe fn push(packets: *const SocksPacket, count: usize) -> Result<(
         }
         let bytes = std::slice::from_raw_parts(packet.data, packet.len);
         engine
+            .counters
+            .add_tx(bytes.len() as u64);
+        engine
             .tx
             .send(Bytes::copy_from_slice(bytes))
             .map_err(|_| "core is not running".to_owned())?;
@@ -250,8 +276,15 @@ pub(crate) fn notify_network_changed() -> Result<(), String> {
     )
 }
 
+/// How often the tunnel byte counts are reported.
+const TRAFFIC_INTERVAL: Duration = Duration::from_secs(1);
+
 fn status_event(status: &str) -> String {
     serde_json::json!({ "type": "status", "status": status }).to_string()
+}
+
+fn traffic_event(tx: u64, rx: u64) -> String {
+    serde_json::json!({ "type": "traffic", "tx": tx, "rx": rx }).to_string()
 }
 
 fn error_event(message: &str) -> String {

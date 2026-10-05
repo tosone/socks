@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,7 @@ use crate::client_config;
 use crate::error::{AppError, AppResult};
 use crate::packet_tunnel;
 use crate::profiles::{self, Profile, ProfileInput};
+use crate::{shared, traffic};
 
 const CONNECTIVITY_ATTEMPTS: usize = 3;
 const CONNECTIVITY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -48,13 +50,16 @@ pub struct TrafficTotals {
 struct RuntimeSession {
     profile_id: String,
     connectivity_task: JoinHandle<()>,
+    /// Polls the extension's byte counters; `None` when the App Group is
+    /// unavailable and stats cannot be shared.
+    traffic_task: Option<JoinHandle<()>>,
 }
 
 pub struct AppState {
     data_dir: PathBuf,
     app: AppHandle,
     profiles: Mutex<Vec<Profile>>,
-    traffic_totals: Mutex<HashMap<String, TrafficTotals>>,
+    traffic_totals: Arc<Mutex<HashMap<String, TrafficTotals>>>,
     session: Mutex<Option<RuntimeSession>>,
 }
 
@@ -74,7 +79,7 @@ impl AppState {
             data_dir,
             app,
             profiles: Mutex::new(profiles),
-            traffic_totals: Mutex::new(traffic_totals),
+            traffic_totals: Arc::new(Mutex::new(traffic_totals)),
             session: Mutex::new(None),
         })
     }
@@ -165,10 +170,22 @@ impl AppState {
         start_packet_tunnel(&profile, &transport_config).await?;
 
         let connectivity_task = spawn_connectivity_check(self.app.clone(), profile.id.clone());
+        let traffic_task = match shared::container_path()? {
+            Some(container) => Some(traffic::spawn_poll(
+                self.app.clone(),
+                profile.id.clone(),
+                container.join(traffic::SHARED_FILE_NAME),
+                self.traffic_totals.clone(),
+                self.data_dir.clone(),
+            )),
+            None => None,
+        };
+
         let mut session = self.session.lock().await;
         *session = Some(RuntimeSession {
             profile_id: profile.id,
             connectivity_task,
+            traffic_task,
         });
         drop(session);
         Ok(self.runtime_status().await)
@@ -178,6 +195,9 @@ impl AppState {
         let mut session = self.session.lock().await;
         if let Some(current) = session.take() {
             current.connectivity_task.abort();
+            if let Some(task) = current.traffic_task {
+                task.abort();
+            }
             let stop_result = stop_packet_tunnel(&current.profile_id).await;
             if let Some(total) = self
                 .traffic_totals
@@ -300,7 +320,11 @@ fn load_traffic_totals(data_dir: &Path, profile_id: &str) -> AppResult<TrafficTo
     Ok(serde_json::from_str(&raw)?)
 }
 
-fn save_traffic_totals(data_dir: &Path, profile_id: &str, totals: &TrafficTotals) -> AppResult<()> {
+pub(crate) fn save_traffic_totals(
+    data_dir: &Path,
+    profile_id: &str,
+    totals: &TrafficTotals,
+) -> AppResult<()> {
     fs::create_dir_all(traffic_dir(data_dir))?;
     let raw = serde_json::to_string_pretty(totals)?;
     fs::write(traffic_path(data_dir, profile_id), raw)?;
