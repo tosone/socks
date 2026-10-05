@@ -8,8 +8,8 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
+use crate::client_config;
 use crate::error::{AppError, AppResult};
-use crate::outline_config;
 use crate::packet_tunnel;
 use crate::profiles::{self, Profile, ProfileInput};
 
@@ -161,7 +161,7 @@ impl AppState {
                 .ok_or_else(|| AppError::msg("Profile not found"))?
         };
 
-        let transport_config = outline_config::transport_config(&profile)?;
+        let transport_config = client_config::client_config(&profile)?;
         start_packet_tunnel(&profile, &transport_config).await?;
 
         let connectivity_task = spawn_connectivity_check(self.app.clone(), profile.id.clone());
