@@ -1,0 +1,188 @@
+diff --git a/crates/shadowsocks-service/src/local/tun/mod.rs b/crates/shadowsocks-service/src/local/tun/mod.rs
+index 1bafc583..0cef6afd 100644
+--- a/crates/shadowsocks-service/src/local/tun/mod.rs
++++ b/crates/shadowsocks-service/src/local/tun/mod.rs
+@@ -5,7 +5,9 @@ use std::os::unix::io::RawFd;
+ use std::{
+     io, mem,
+     net::{IpAddr, SocketAddr},
++    pin::Pin,
+     sync::Arc,
++    task::{Context, Poll},
+     time::Duration,
+ };
+ 
+@@ -16,7 +18,7 @@ use log::{debug, error, info, trace, warn};
+ use shadowsocks::config::Mode;
+ use smoltcp::wire::{IpProtocol, TcpPacket, UdpPacket};
+ use tokio::{
+-    io::{AsyncReadExt, AsyncWriteExt},
++    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf},
+     sync::mpsc,
+     time,
+ };
+@@ -48,6 +50,93 @@ mod tcp;
+ mod udp;
+ mod virt_device;
+ 
++/// A packet-oriented device that a [`Tun`] can relay traffic on.
++///
++/// Implement this when the host platform owns the packet source/sink and does
++/// not expose a TUN file descriptor, for example the packet flow of an Apple
++/// `NEPacketTunnelProvider`. The device exchanges raw IP packets (L3) through
++/// its [`AsyncRead`]/[`AsyncWrite`] implementation.
++pub trait TunStream: AsyncRead + AsyncWrite + Unpin + Send {
++    /// Local IPv4/IPv6 address assigned to this device.
++    fn address(&self) -> IpAddr;
++    /// Netmask of [`TunStream::address`].
++    fn netmask(&self) -> IpAddr;
++    /// Device name, used for logging only.
++    fn tun_name(&self) -> String {
++        "virtual".to_owned()
++    }
++}
++
++/// Concrete device backing a [`Tun`].
++enum Device {
++    /// A real TUN device created from [`TunConfiguration`].
++    Real(AsyncDevice),
++    /// A host-provided device, e.g. a NetworkExtension packet flow.
++    Virtual(Box<dyn TunStream>),
++}
++
++impl Device {
++    fn tun_name(&self) -> io::Result<String> {
++        match self {
++            Device::Real(device) => Ok(device.tun_name().unwrap_or_else(|_| "tun".to_owned())),
++            Device::Virtual(device) => Ok(device.tun_name()),
++        }
++    }
++
++    fn address(&self) -> io::Result<IpAddr> {
++        match self {
++            Device::Real(device) => device.address().map_err(|err| io::Error::other(err)),
++            Device::Virtual(device) => Ok(device.address()),
++        }
++    }
++
++    fn netmask(&self) -> io::Result<IpAddr> {
++        match self {
++            Device::Real(device) => device.netmask().map_err(|err| io::Error::other(err)),
++            Device::Virtual(device) => Ok(device.netmask()),
++        }
++    }
++
++    fn mtu(&self) -> u16 {
++        match self {
++            Device::Real(device) => device.mtu().unwrap_or(1500),
++            Device::Virtual(_) => 1500,
++        }
++    }
++}
++
++impl AsyncRead for Device {
++    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
++        match self.get_mut() {
++            Device::Real(device) => Pin::new(device).poll_read(cx, buf),
++            Device::Virtual(device) => Pin::new(device.as_mut()).poll_read(cx, buf),
++        }
++    }
++}
++
++impl AsyncWrite for Device {
++    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
++        match self.get_mut() {
++            Device::Real(device) => Pin::new(device).poll_write(cx, buf),
++            Device::Virtual(device) => Pin::new(device.as_mut()).poll_write(cx, buf),
++        }
++    }
++
++    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
++        match self.get_mut() {
++            Device::Real(device) => Pin::new(device).poll_flush(cx),
++            Device::Virtual(device) => Pin::new(device.as_mut()).poll_flush(cx),
++        }
++    }
++
++    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
++        match self.get_mut() {
++            Device::Real(device) => Pin::new(device).poll_shutdown(cx),
++            Device::Virtual(device) => Pin::new(device.as_mut()).poll_shutdown(cx),
++        }
++    }
++}
++
+ /// Tun service builder
+ pub struct TunBuilder {
+     context: Arc<ServiceContext>,
+@@ -116,11 +205,24 @@ impl TunBuilder {
+         // });
+ 
+         let device = match create_as_async(&self.tun_config) {
+-            Ok(d) => d,
++            Ok(d) => Device::Real(d),
+             Err(TunError::Io(err)) => return Err(err),
+             Err(err) => return Err(io::Error::other(err)),
+         };
+ 
++        self.finish(device)
++    }
++
++    /// Build Tun server on a caller-provided [`TunStream`] device.
++    ///
++    /// Use this instead of [`TunBuilder::build`] when the host platform owns the
++    /// packet source/sink and does not expose a TUN file descriptor, such as an
++    /// Apple `NEPacketTunnelProvider` packet flow.
++    pub async fn build_with_device(self, device: Box<dyn TunStream>) -> io::Result<Tun> {
++        self.finish(Device::Virtual(device))
++    }
++
++    fn finish(self, device: Device) -> io::Result<Tun> {
+         let (udp, udp_cleanup_interval, udp_keepalive_rx) = UdpTun::new(
+             self.context.clone(),
+             self.balancer.clone(),
+@@ -128,7 +230,7 @@ impl TunBuilder {
+             self.udp_capacity,
+         );
+ 
+-        let tcp = TcpTun::new(self.context, self.balancer, device.mtu().unwrap_or(1500) as u32);
++        let tcp = TcpTun::new(self.context, self.balancer, device.mtu() as u32);
+ 
+         Ok(Tun {
+             device,
+@@ -143,7 +245,7 @@ impl TunBuilder {
+ 
+ /// Tun service
+ pub struct Tun {
+-    device: AsyncDevice,
++    device: Device,
+     tcp: TcpTun,
+     udp: UdpTun,
+     udp_cleanup_interval: Duration,
+@@ -156,7 +258,7 @@ impl Tun {
+     pub async fn run(mut self) -> io::Result<()> {
+         info!(
+             "shadowsocks tun device {}, mode {}",
+-            self.device.tun_name().or_else(|r| Ok::<_, ()>(r.to_string())).unwrap(),
++            self.device.tun_name().unwrap_or_else(|_| "unknown".to_owned()),
+             self.mode,
+         );
+ 
+@@ -164,7 +266,7 @@ impl Tun {
+             Ok(a) => a,
+             Err(err) => {
+                 error!("[TUN] failed to get device address, error: {}", err);
+-                return Err(io::Error::other(err));
++                return Err(err);
+             }
+         };
+ 
+@@ -172,7 +274,7 @@ impl Tun {
+             Ok(n) => n,
+             Err(err) => {
+                 error!("[TUN] failed to get device netmask, error: {}", err);
+-                return Err(io::Error::other(err));
++                return Err(err);
+             }
+         };
+ 

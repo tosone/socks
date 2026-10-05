@@ -1,0 +1,57 @@
+[package]
+name = "socks-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Shadowsocks userspace data plane for the macOS NetworkExtension"
+
+[lib]
+name = "socks_core"
+# staticlib: linked into the .appex by Xcode.
+# rlib: used by tests and by cbindgen.
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+shadowsocks = { path = "../shadowsocks-rust/crates/shadowsocks", default-features = false, features = [
+    "aead-cipher",
+    "aead-cipher-extra",
+    "aead-cipher-2022",
+    "aead-cipher-2022-extra",
+    "stream-cipher",
+] }
+shadowsocks-service = { path = "../shadowsocks-rust/crates/shadowsocks-service", default-features = false, features = [
+    "local-tun",
+    "hickory-dns",
+    "aead-cipher",
+    "aead-cipher-extra",
+    "aead-cipher-2022",
+    "aead-cipher-2022-extra",
+    "stream-cipher",
+] }
+
+bytes = "1"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = [
+    "io-util",
+    "macros",
+    "net",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
+base64 = "0.22"
+sha2 = "0.10"
+
+[build-dependencies]
+cbindgen = "0.29"
+
+[profile.release]
+# The extension runs in a memory-constrained process; keep the core small.
+lto = true
+codegen-units = 1
+# Do NOT strip here: with Xcode 27, `-C strip=debuginfo` intermittently
+# produces "mis-aligned LINKEDIT string pool" artifacts. Strip in the packaging
+# step instead if size matters. See src-tauri/Cargo.toml for details.
+strip = "none"
