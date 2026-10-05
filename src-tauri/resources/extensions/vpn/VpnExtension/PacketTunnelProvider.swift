@@ -10,17 +10,29 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
   private enum ConfigKey {
     static let tunnelId = "id"
     static let transport = "transport"
-    /// Optional `[String]` of DNS server addresses to advertise to the system.
+    /// Optional `String` DNS-over-HTTPS endpoint (defaults to `defaultDohURL`).
+    static let dohURL = "dohURL"
+    /// Optional `String` SNI/certificate name for DNS-over-TLS.
+    static let dotServerName = "dotServerName"
+    /// Optional `[String]` of DNS server addresses (plain DNS, or DoT endpoints
+    /// when `dotServerName` is set).
     static let dnsServers = "dnsServers"
   }
 
-  /// DNS servers advertised to the system.
+  /// DNS advertised to the system.
   ///
-  /// They must be reachable *through* the tunnel and get resolved by the
-  /// Shadowsocks server. We deliberately do NOT use a fake link-local address:
-  /// `169.254.0.0/16` is in `excludedSubnets`, so queries to such an address
-  /// bypass the tunnel and time out (verified on device).
-  private static let defaultDnsServers = ["1.1.1.1", "8.8.8.8"]
+  /// Plain UDP DNS is useless here: this Shadowsocks server does not relay UDP
+  /// at all (verified on device: `dig @1.1.1.1` times out, `dig +tcp @1.1.1.1`
+  /// succeeds), and the old fake link-local address sits inside the excluded
+  /// `169.254.0.0/16` route so it never even reaches the tunnel. DNS-over-HTTPS
+  /// rides the working TCP path instead, and needs no packet interception.
+  ///
+  /// `https://8.8.8.8/dns-query` specifically: the address is an IP, so there is
+  /// no chicken-and-egg bootstrap lookup, and Google's certificate carries an
+  /// `IP Address:8.8.8.8` SAN, so TLS validation succeeds. Cloudflare's
+  /// certificate only has `DNS:cloudflare-dns.com`, which is why
+  /// `https://1.1.1.1/dns-query` would fail.
+  private static let defaultDohURL = URL(string: "https://8.8.8.8/dns-query")!
 
   private var relay: RustRelay?
   private var observingDefaultPath = false
@@ -46,10 +58,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
       return
     }
 
-    let dnsServers = (protocolConfig.providerConfiguration?[ConfigKey.dnsServers] as? [String])?
-      .filter { !$0.isEmpty } ?? Self.defaultDnsServers
-
-    let network = Self.makeNetwork(dnsServers: dnsServers)
+    let network = Self.makeNetwork(dnsSettings: Self.makeDnsSettings(protocolConfig))
     setTunnelNetworkSettings(network.settings) { [weak self] error in
       if let error {
         completionHandler(error)
@@ -105,7 +114,41 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
   }
 
-  private static func makeNetwork(dnsServers: [String]) -> TunnelNetwork {
+  /// Pick the DNS settings to advertise, preferring (in order): an explicit
+  /// DoH URL, an explicit DoT server name, plain DNS servers, then the default
+  /// DoH endpoint.
+  private static func makeDnsSettings(_ protocolConfig: NETunnelProviderProtocol) -> NEDNSSettings {
+    let config = protocolConfig.providerConfiguration
+    let servers = (config?[ConfigKey.dnsServers] as? [String])?.filter { !$0.isEmpty } ?? []
+
+    if let raw = config?[ConfigKey.dohURL] as? String,
+      let url = URL(string: raw), url.scheme?.lowercased() == "https"
+    {
+      return makeDohSettings(url: url)
+    }
+
+    if let serverName = config?[ConfigKey.dotServerName] as? String, !serverName.isEmpty {
+      let settings = NEDNSOverTLSSettings(servers: servers.isEmpty ? ["1.1.1.1"] : servers)
+      settings.serverName = serverName
+      return settings
+    }
+
+    if !servers.isEmpty {
+      return NEDNSSettings(servers: servers)
+    }
+
+    return makeDohSettings(url: defaultDohURL)
+  }
+
+  /// `NEDNSOverHTTPSSettings` only inherits `init(servers:)`; the endpoint is a
+  /// property (`servers` is unused for DoH).
+  private static func makeDohSettings(url: URL) -> NEDNSOverHTTPSSettings {
+    let settings = NEDNSOverHTTPSSettings(servers: [])
+    settings.serverURL = url
+    return settings
+  }
+
+  private static func makeNetwork(dnsSettings: NEDNSSettings) -> TunnelNetwork {
     let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "::")
     let vpnAddress = selectVpnAddress(interfaceAddresses: networkInterfaceAddresses())
     let subnetMask = "255.255.255.0"
@@ -113,7 +156,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     ipv4Settings.includedRoutes = [NEIPv4Route.default()]
     ipv4Settings.excludedRoutes = excludedIpv4Routes()
     settings.ipv4Settings = ipv4Settings
-    settings.dnsSettings = NEDNSSettings(servers: dnsServers)
+    settings.dnsSettings = dnsSettings
     return TunnelNetwork(address: vpnAddress, subnetMask: subnetMask, settings: settings)
   }
 
