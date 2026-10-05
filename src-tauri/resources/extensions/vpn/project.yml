@@ -1,0 +1,86 @@
+# xcodegen spec for the macOS Packet Tunnel extension.
+#
+# Generated project:  SocksTunnel.xcodeproj
+# Regenerate:         make extension-project
+#
+# The extension is embedded into the Tauri app bundle by the Makefile
+# (`extension-embed`), not by Xcode, so this project only needs to produce a
+# signed `SocksTunnelExtension.appex`.
+name: SocksTunnel
+
+options:
+  bundleIdPrefix: com.tosone.socks
+  createIntermediateGroups: true
+  deploymentTarget:
+    macOS: "13.0"
+  minimumXcodeGenVersion: "2.40.0"
+  groupSortPosition: top
+
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    # Real signing. The Makefile can override these on the xcodebuild command
+    # line (e.g. CODE_SIGN_STYLE=Automatic, or a Developer ID identity).
+    # The extension's provisioning profile is set per-target below.
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "Apple Development"
+    DEVELOPMENT_TEAM: "4J2GZTPK37"
+    # Development profiles do not need a secure timestamp; avoids a network call.
+    OTHER_CODE_SIGN_FLAGS: "--timestamp=none"
+    ENABLE_HARDENED_RUNTIME: YES
+    # Keep the appex self-contained and out of the way of the host app build.
+    SKIP_INSTALL: YES
+    ALWAYS_SEARCH_USER_PATHS: NO
+    CLANG_ENABLE_OBJC_ARC: YES
+    SWIFT_STRICT_CONCURRENCY: minimal
+
+targets:
+  SocksTunnelExtension:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: VpnExtension
+        excludes:
+          - "Info.plist"
+          - "SocksTunnelExtension.entitlements"
+    settings:
+      base:
+        PRODUCT_NAME: SocksTunnelExtension
+        PRODUCT_BUNDLE_IDENTIFIER: com.tosone.socks.SocksTunnelExtension
+        INFOPLIST_FILE: VpnExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: VpnExtension/SocksTunnelExtension.entitlements
+        # Installed under ~/Library/MobileDevice/Provisioning Profiles/.
+        PROVISIONING_PROFILE_SPECIFIER: "socks extension dev"
+        # App extensions are loaded into a host process; they are not apps.
+        PRODUCT_BUNDLE_PACKAGE_TYPE: XPC!
+        # Rust data plane (built by `make core`, injected by `make extension-build`).
+        SWIFT_OBJC_BRIDGING_HEADER: VpnExtension/VpnExtension-Bridging-Header.h
+        HEADER_SEARCH_PATHS:
+          - "$(CORE_INCLUDE_DIR)"
+        OTHER_LDFLAGS:
+          - "$(inherited)"
+          - "$(CORE_STATIC_LIB)"
+          - "-framework"
+          - "Security"
+          - "-framework"
+          - "CoreFoundation"
+          - "-framework"
+          - "SystemConfiguration"
+          - "-liconv"
+          - "-lresolv"
+    dependencies:
+      - sdk: NetworkExtension.framework
+      - sdk: Foundation.framework
+
+schemes:
+  SocksTunnelExtension:
+    build:
+      targets:
+        SocksTunnelExtension: all
+    run:
+      config: Debug
+    archive:
+      config: Release

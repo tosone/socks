@@ -25,7 +25,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["app"],
     "icon": ["icons/icon.icns"],
     "macOS": {
       "entitlements": "resources/extensions/vpn/App.entitlements",
