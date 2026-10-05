@@ -9,6 +9,12 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
 
+  build: {
+    // The whole app is bundled into a single chunk; for a desktop (Tauri)
+    // bundle this is fine, so silence the "chunks larger than 500 kB" warning.
+    chunkSizeWarningLimit: Infinity,
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
