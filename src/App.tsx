@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Plus } from "lucide-react";
 import {
@@ -171,8 +171,27 @@ export default function App() {
     );
   }
 
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+
   useEffect(() => {
     refresh().catch((err) => setErrorDialog(String(err)));
+  }, []);
+
+  // The tray can connect/disconnect without going through the UI; refresh when
+  // it reports a new runtime status.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen("runtime-status", () => {
+      refreshRef.current().catch((err) => setErrorDialog(String(err)));
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((err) => setErrorDialog(String(err)));
+    return () => {
+      unlisten?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -474,6 +493,7 @@ export default function App() {
                       key={profile.id}
                       profile={profile}
                       connecting={mockStatus === "checking"}
+                      connected={connected}
                       upBps={connected ? speed.up : 0}
                       downBps={connected ? speed.down : 0}
                       totalUpBytes={total.up}
@@ -528,6 +548,7 @@ export default function App() {
                   key={profile.id}
                   profile={profile}
                   connecting={busyId === profile.id}
+                  connected={connected}
                   upBps={connected ? speed.up : 0}
                   downBps={connected ? speed.down : 0}
                   totalUpBytes={total.up}
