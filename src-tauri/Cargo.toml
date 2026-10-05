@@ -45,3 +45,12 @@ shadowsocks = { path = "../shadowsocks-rust/crates/shadowsocks", default-feature
     "aead-cipher-2022-extra",
     "stream-cipher",
 ] }
+
+# Xcode 27's linker/strip combination intermittently produces dylibs with a
+# "mis-aligned LINKEDIT string pool", which makes proc-macro crates (e.g.
+# tauri_macros, futures_macro) fail to load with:
+#   error[E0463]: can't find crate for `tauri_macros`
+# Cargo's default release profile passes `-C strip=debuginfo`; disabling it
+# avoids the buggy strip path at the cost of a larger binary.
+[profile.release]
+strip = "none"
