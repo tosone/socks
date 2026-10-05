@@ -39,6 +39,15 @@ pub struct StartConfig {
     /// SIP003 plugin options (not supported yet; logged and ignored).
     #[serde(default)]
     pub plugin_opts: Option<String>,
+
+    /// Level for the rolling data plane log: `error`, `warn`, `info`,
+    /// `debug` (default), `trace` or `off`.
+    ///
+    /// Debug is the default because the interesting per-connection detail
+    /// ("created TCP connection for ...") lives there; the rolling writer keeps
+    /// the volume bounded.
+    #[serde(default)]
+    pub log_level: Option<String>,
 }
 
 impl StartConfig {
@@ -51,6 +60,18 @@ impl StartConfig {
                 log::warn!("unknown mode {other:?}, falling back to tcp_and_udp");
                 Mode::TcpAndUdp
             }
+        }
+    }
+
+    /// Level for the rolling data plane log.
+    pub fn log_level_filter(&self) -> log::LevelFilter {
+        match self.log_level.as_deref().map(str::trim) {
+            Some("error") => log::LevelFilter::Error,
+            Some("warn") | Some("warning") => log::LevelFilter::Warn,
+            Some("info") => log::LevelFilter::Info,
+            Some("trace") => log::LevelFilter::Trace,
+            Some("off") | Some("none") => log::LevelFilter::Off,
+            _ => log::LevelFilter::Debug,
         }
     }
 
@@ -134,6 +155,7 @@ mod tests {
             udp_max_associations: None,
             plugin: None,
             plugin_opts: None,
+            log_level: None,
         }
     }
 

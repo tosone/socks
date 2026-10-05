@@ -52,9 +52,10 @@ extern "C" {
  * `config_json` uses the standard Shadowsocks shape:
  * `{"server":..,"server_port":..,"method":..,"password":..}`.
  * `tunnel_address` / `tunnel_netmask` must match the address configured in
- * `NEPacketTunnelNetworkSettings`.
+ * `NEPacketTunnelNetworkSettings`. `log_dir` is optional: when set, every level
+ * of the data plane log is written to a rolling `socks.log` in that directory.
  */
-int socks_core_start(const char *config_json, const char *tunnel_address, const char *tunnel_netmask, SocksSendFn send, SocksEventFn event, void *ctx, char *error_buffer, uintptr_t error_buffer_len);
+int socks_core_start(const char *config_json, const char *tunnel_address, const char *tunnel_netmask, const char *log_dir, SocksSendFn send, SocksEventFn event, void *ctx, char *error_buffer, uintptr_t error_buffer_len);
 
 /**
  * Enqueue packets read from the tunnel. Returns `0` on success.

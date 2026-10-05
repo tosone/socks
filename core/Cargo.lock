@@ -2059,6 +2059,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "cbindgen",
+ "libc",
  "log",
  "serde",
  "serde_json",

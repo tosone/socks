@@ -201,11 +201,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
   ///
   /// Without this the IPv6 default route stays on the physical interface, so on
   /// an IPv6-capable network every connection would leave unproxied while the
-  /// UI claims it is tunnelled. The core cannot relay IPv6 yet (the smoltcp
-  /// interface only holds the IPv4 tunnel address), so IPv6 currently
-  /// dead-ends and apps fall back to IPv4 through Happy Eyeballs. Leaking is
-  /// worse than breaking, and this also puts the routing in place for the
-  /// eventual IPv6 support tracked as M4.3 option A.
+  /// UI claims it is tunnelled.
+  ///
+  /// Verified on device: with this in place IPv6 is not merely blocked, it is
+  /// actually relayed. smoltcp is built with `proto-ipv6`, `TcpTun` handles
+  /// `IpAddr` generically and the send callback already picks `AF_INET6` from
+  /// the IP version nibble, so wiring up the routes was enough.
   private static func makeIpv6Settings() -> NEIPv6Settings {
     let settings = NEIPv6Settings(
       addresses: [vpnIpv6Address],
@@ -236,6 +237,8 @@ private final class RustRelay {
   private let tunnelAddress: String
   private let subnetMask: String
   private let packetFlow: NEPacketTunnelFlow
+  /// Directory for the rolling data plane log, or nil to log to memory only.
+  private let logDirectory: URL?
   private var running = false
 
   init(configJSON: String, tunnelAddress: String, subnetMask: String, packetFlow: NEPacketTunnelFlow) {
@@ -243,25 +246,45 @@ private final class RustRelay {
     self.tunnelAddress = tunnelAddress
     self.subnetMask = subnetMask
     self.packetFlow = packetFlow
+    self.logDirectory = Self.defaultLogDirectory()
+  }
+
+  /// Directory for the rolling data plane log.
+  ///
+  /// The App Group is preferred so the host app (and the user) can read it; the
+  /// extension's own Library directory is the fallback when the group is not
+  /// available. The core creates the directory itself.
+  private static func defaultLogDirectory() -> URL? {
+    let fileManager = FileManager.default
+    if let group = fileManager.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier) {
+      return group.appendingPathComponent("Logs", isDirectory: true)
+    }
+    return fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first?
+      .appendingPathComponent("Logs", isDirectory: true)
   }
 
   func start() throws {
     let context = Unmanaged.passUnretained(self).toOpaque()
     var errorBuffer = [CChar](repeating: 0, count: 2048)
+    let logPath = logDirectory?.path ?? ""
 
     let status = configJSON.withCString { configPointer in
       tunnelAddress.withCString { addressPointer in
         subnetMask.withCString { maskPointer in
-          socks_core_start(
-            configPointer,
-            addressPointer,
-            maskPointer,
-            socksCoreSend,
-            socksCoreEvent,
-            context,
-            &errorBuffer,
-            UInt(errorBuffer.count)
-          )
+          logPath.withCString { logPointer in
+            let optionalLogPointer: UnsafePointer<CChar>? = logDirectory == nil ? nil : logPointer
+            return socks_core_start(
+              configPointer,
+              addressPointer,
+              maskPointer,
+              optionalLogPointer,
+              socksCoreSend,
+              socksCoreEvent,
+              context,
+              &errorBuffer,
+              UInt(errorBuffer.count)
+            )
+          }
         }
       }
     }
@@ -437,6 +460,9 @@ private func excludedIpv4Routes() -> [NEIPv4Route] {
     return NEIPv4Route(destinationAddress: parsed.address, subnetMask: parsed.mask)
   }
 }
+
+/// App Group shared with the host app, declared in both entitlements files.
+private let appGroupIdentifier = "group.com.tosone.socks"
 
 /// IPv6 address of the tunnel interface.
 ///

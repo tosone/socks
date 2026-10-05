@@ -129,6 +129,9 @@ fn pushed_syn_connects_to_the_shadowsocks_server() {
     let config = std::ffi::CString::new(config).unwrap();
     let address = std::ffi::CString::new("10.111.222.0").unwrap();
     let netmask = std::ffi::CString::new("255.255.255.0").unwrap();
+    let log_dir = std::env::temp_dir().join(format!("socks-core-dataplane-log-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&log_dir);
+    let log_dir_c = std::ffi::CString::new(log_dir.to_string_lossy().as_bytes()).unwrap();
     let mut error = [0 as c_char; 1024];
 
     let status = unsafe {
@@ -136,6 +139,7 @@ fn pushed_syn_connects_to_the_shadowsocks_server() {
             config.as_ptr(),
             address.as_ptr(),
             netmask.as_ptr(),
+            log_dir_c.as_ptr(),
             record_send,
             ignore_event,
             ptr::null_mut(),
@@ -195,4 +199,14 @@ fn pushed_syn_connects_to_the_shadowsocks_server() {
     );
 
     socks_core_stop();
+
+    // The rolling log must have captured the data plane, including the restart
+    // triggered by the simulated network change.
+    let log = std::fs::read_to_string(log_dir.join("socks.log")).expect("rolling log should exist");
+    assert!(
+        log.contains("default network path changed"),
+        "rolling log should record the network-change restart, got:\n{log}"
+    );
+
+    let _ = std::fs::remove_dir_all(&log_dir);
 }

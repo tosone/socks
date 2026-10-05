@@ -16,6 +16,7 @@
 mod config;
 mod device;
 mod engine;
+mod logging;
 
 use std::{
     os::raw::{c_char, c_int, c_void},
@@ -30,12 +31,14 @@ pub use device::{SocksEventFn, SocksPacket, SocksSendFn};
 /// `config_json` uses the standard Shadowsocks shape:
 /// `{"server":..,"server_port":..,"method":..,"password":..}`.
 /// `tunnel_address` / `tunnel_netmask` must match the address configured in
-/// `NEPacketTunnelNetworkSettings`.
+/// `NEPacketTunnelNetworkSettings`. `log_dir` is optional: when set, every level
+/// of the data plane log is written to a rolling `socks.log` in that directory.
 #[no_mangle]
 pub unsafe extern "C" fn socks_core_start(
     config_json: *const c_char,
     tunnel_address: *const c_char,
     tunnel_netmask: *const c_char,
+    log_dir: *const c_char,
     send: SocksSendFn,
     event: SocksEventFn,
     ctx: *mut c_void,
@@ -46,6 +49,7 @@ pub unsafe extern "C" fn socks_core_start(
         let config_json = read_cstr(config_json, "config_json")?;
         let tunnel_address = read_cstr(tunnel_address, "tunnel_address")?;
         let tunnel_netmask = read_cstr(tunnel_netmask, "tunnel_netmask")?;
+        let log_dir = read_opt_cstr(log_dir, "log_dir")?;
 
         let config: config::StartConfig =
             serde_json::from_str(&config_json).map_err(|err| format!("invalid config JSON: {err}"))?;
@@ -54,6 +58,7 @@ pub unsafe extern "C" fn socks_core_start(
             config,
             &tunnel_address,
             &tunnel_netmask,
+            log_dir,
             send,
             event,
             ctx,
@@ -125,4 +130,12 @@ unsafe fn read_cstr(pointer: *const c_char, label: &str) -> Result<String, Strin
         .to_str()
         .map(str::to_owned)
         .map_err(|_| format!("{label} is not valid UTF-8"))
+}
+
+/// Like [`read_cstr`], but a null pointer means "not provided".
+unsafe fn read_opt_cstr(pointer: *const c_char, label: &str) -> Result<Option<String>, String> {
+    if pointer.is_null() {
+        return Ok(None);
+    }
+    read_cstr(pointer, label).map(Some)
 }

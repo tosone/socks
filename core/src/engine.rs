@@ -3,7 +3,11 @@
 use std::{
     net::IpAddr,
     os::raw::c_void,
-    sync::{Arc, Mutex},
+    path::Path,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -25,6 +29,7 @@ struct StartParams {
     config: StartConfig,
     tunnel_address: String,
     tunnel_netmask: String,
+    log_dir: Option<String>,
     send: SocksSendFn,
     event: SocksEventFn,
     ctx: *mut c_void,
@@ -41,6 +46,9 @@ struct Engine {
     tx: mpsc::UnboundedSender<Bytes>,
     events: EventCallback,
     params: StartParams,
+    /// Set by [`stop`] so the tun task can tell a deliberate shutdown apart from
+    /// a real failure and skip the error log/event.
+    shutdown: Arc<AtomicBool>,
 }
 
 /// Only one tunnel can run at a time, and the FFI calls are synchronous.
@@ -50,10 +58,20 @@ pub(crate) fn start(
     config: StartConfig,
     tunnel_address: &str,
     tunnel_netmask: &str,
+    log_dir: Option<String>,
     send: SocksSendFn,
     event: SocksEventFn,
     ctx: *mut c_void,
 ) -> Result<(), String> {
+    // Install the rolling log first so startup failures are captured too.
+    // Reconfiguring an already installed logger is a no-op whenever the settings
+    // are unchanged, which matters because a network change restarts the core.
+    if let Some(dir) = log_dir.as_deref() {
+        if let Err(err) = crate::logging::install(Path::new(dir), config.log_level_filter()) {
+            log::warn!("failed to install the rolling log in {dir}: {err}");
+        }
+    }
+
     // Make `start` idempotent: a second start replaces the first tunnel.
     let _ = stop();
 
@@ -107,11 +125,18 @@ pub(crate) fn start(
 
     let events = EventCallback::new(event, ctx);
     let run_events = events;
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let run_shutdown = shutdown.clone();
 
     runtime.spawn(async move {
         if let Err(err) = tun.run().await {
-            log::error!("tun service stopped with error: {err}");
-            run_events.emit(&error_event(&err.to_string()));
+            if run_shutdown.load(Ordering::Relaxed) {
+                // Expected: the channel is closed and the runtime dropped on stop.
+                log::debug!("tun service stopped");
+            } else {
+                log::error!("tun service stopped with error: {err}");
+                run_events.emit(&error_event(&err.to_string()));
+            }
         }
     });
 
@@ -126,10 +151,12 @@ pub(crate) fn start(
             config,
             tunnel_address: tunnel_address.to_owned(),
             tunnel_netmask: tunnel_netmask.to_owned(),
+            log_dir,
             send,
             event,
             ctx,
         },
+        shutdown,
     });
     Ok(())
 }
@@ -141,6 +168,8 @@ pub(crate) fn stop() -> Result<(), String> {
     };
 
     if let Some(engine) = engine {
+        // Let the tun task know this is deliberate before the channel closes.
+        engine.shutdown.store(true, Ordering::Relaxed);
         // Closing the channel makes the device read side fail, and dropping the
         // runtime aborts the tun task.
         drop(engine.tx);
@@ -205,11 +234,20 @@ pub(crate) fn notify_network_changed() -> Result<(), String> {
         config,
         tunnel_address,
         tunnel_netmask,
+        log_dir,
         send,
         event,
         ctx,
     } = params;
-    start(config, &tunnel_address, &tunnel_netmask, send, event, ctx)
+    start(
+        config,
+        &tunnel_address,
+        &tunnel_netmask,
+        log_dir,
+        send,
+        event,
+        ctx,
+    )
 }
 
 fn status_event(status: &str) -> String {
