@@ -38,6 +38,8 @@ CORE_LIB ?= $(CORE_OUT_DIR)/libsocks_core.a
 
 TAURI_BUNDLE_DIR ?= $(ROOT_DIR)/src-tauri/target/release/bundle/macos
 TAURI_APP_BUNDLE ?= $(TAURI_BUNDLE_DIR)/socks.app
+TAURI_UNIVERSAL_TARGET ?= universal-apple-darwin
+TAURI_UNIVERSAL_APP_BUNDLE ?= $(ROOT_DIR)/src-tauri/target/$(TAURI_UNIVERSAL_TARGET)/release/bundle/macos/socks.app
 
 UNAME_M := $(shell uname -m)
 ifeq ($(UNAME_M),arm64)
@@ -61,7 +63,7 @@ DMG_VOLUME_NAME ?= socks
 # Match Tauri's artifact naming (arm64 -> aarch64).
 DMG_ARCH ?= $(if $(filter arm64,$(MACOS_ARCH)),aarch64,$(MACOS_ARCH))
 
-.PHONY: help all frontend rust-check submodule-patch core core-build extension extension-check extension-project extension-build extension-embed tauri package dmg clean-extension clean-core clean-dmg
+.PHONY: help all frontend rust-check submodule-patch core core-build extension extension-check extension-project extension-build extension-embed tauri package dmg dmg-universal clean-extension clean-core clean-dmg
 
 help:
 	@printf "%s\n" \
@@ -76,6 +78,7 @@ help:
 		"  make rust-check      Run cargo check for src-tauri." \
 		"  make extension-embed Embed built .appex into TAURI_APP_BUNDLE=.../socks.app." \
 		"  make dmg             Create the .dmg from the embedded+signed app (run after extension-embed)." \
+		"  make dmg-universal   Build a universal (Intel + Apple Silicon) app + dmg in one step." \
 		"" \
 		"Variables:" \
 		"  VPN_XCODEPROJ=$(VPN_XCODEPROJ)" \
@@ -86,6 +89,7 @@ help:
 		"  VPN_BUNDLE_ID=$(VPN_BUNDLE_ID)" \
 		"  MACOS_TARGET=$(MACOS_TARGET)" \
 		"  TAURI_APP_BUNDLE=$(TAURI_APP_BUNDLE)" \
+		"  TAURI_UNIVERSAL_APP_BUNDLE=$(TAURI_UNIVERSAL_APP_BUNDLE)" \
 		"" \
 		"Signing (already wired up as defaults; make tauri needs no extra flags):" \
 		"  VPN_DEVELOPMENT_TEAM=$(VPN_DEVELOPMENT_TEAM)" \
@@ -218,6 +222,15 @@ tauri: extension
 	else \
 		echo "Tauri app bundle not found at $(TAURI_APP_BUNDLE); skipping extension embed + dmg."; \
 	fi
+
+# Build a single universal (Intel + Apple Silicon) app, embed the signed
+# extension and produce a universal dmg in one step.
+dmg-universal: extension
+	bun run tauri build --target $(TAURI_UNIVERSAL_TARGET)
+	@test -d "$(TAURI_UNIVERSAL_APP_BUNDLE)" \
+		|| { echo "Missing universal app bundle: $(TAURI_UNIVERSAL_APP_BUNDLE)" >&2; exit 1; }
+	$(MAKE) extension-embed TAURI_APP_BUNDLE="$(TAURI_UNIVERSAL_APP_BUNDLE)"
+	$(MAKE) dmg TAURI_APP_BUNDLE="$(TAURI_UNIVERSAL_APP_BUNDLE)" DMG_ARCH=universal
 
 # Must run AFTER extension-embed; see the DMG block above.
 dmg:
