@@ -1,64 +1,79 @@
-# macOS Network Extension Migration
+# macOS Network Extension
 
-This directory contains the native macOS pieces needed to move the Tauri client
-from the current root helper route/DNS model to an Outline-style Packet Tunnel
-Provider model.
+This directory contains the native macOS pieces for the Packet Tunnel backend.
+Route and DNS ownership live in macOS (`NetworkExtension`), not in a root
+helper.
 
-## What This Replaces
+## What this replaces
 
-The current runtime does this in a root helper:
+The old runtime used a root helper to:
 
-- Starts `shadowsocks-rust` with `local-tun`.
-- Discovers `utun` through `ifconfig`.
-- Adds `/1` routes with `/sbin/route`.
-- Changes physical service DNS with `networksetup`.
-- Redirects loopback DNS with PF.
+- Start `shadowsocks-rust` with `local-tun`.
+- Discover `utun` through `ifconfig`.
+- Add `/1` routes with `/sbin/route`.
+- Change the physical service DNS with `networksetup`.
+- Redirect loopback DNS with PF.
 
-The Network Extension model moves route and DNS ownership to macOS:
+The Network Extension model moves all of that to macOS:
 
 - The app starts a `NETunnelProviderManager`.
 - macOS launches a signed `.appex` implementing `NEPacketTunnelProvider`.
-- The extension calls `setTunnelNetworkSettings` with default IPv4 route,
+- The extension calls `setTunnelNetworkSettings` with the default IPv4 route,
   excluded local routes, and `NEDNSSettings`.
 - Packets flow through `NEPacketTunnelFlow`.
 
+## Building
+
+The Xcode project is **generated** from `project.yml`; do not edit
+`SocksTunnel.xcodeproj` by hand (it is gitignored).
+
+```sh
+make extension           # generate + build + sign target/extensions/vpn/SocksTunnelExtension.appex
+make extension-project   # only regenerate SocksTunnel.xcodeproj from project.yml
+```
+
+`make extension` runs:
+
+1. `xcodegen generate` → `SocksTunnel.xcodeproj`
+2. `xcodebuild ... CODE_SIGNING_ALLOWED=NO` → unsigned `.appex`
+3. `codesign --entitlements VpnExtension/SocksTunnelExtension.entitlements`
+   (ad-hoc by default; override with `VPN_CODESIGN_IDENTITY=...`)
+
+The build is deliberately unsigned inside Xcode because
+`com.apple.developer.networking.networkextension` is a restricted entitlement:
+Xcode refuses to sign it without a provisioning profile. The Makefile performs
+the signing so the same flow works for ad-hoc development and for a real
+identity + profile later (see T6.4 in `todo.md`).
+
 ## Files
 
-- `SocksTunnelControl.swift`: app-side controller equivalent to Outline's
-  `OutlineVpn.swift`.
-- `VpnExtension/PacketTunnelProvider.swift`: extension-side tunnel settings and
-  lifecycle skeleton.
+- `project.yml`: xcodegen spec (source of truth for the extension target).
+- `SocksTunnelControl.swift`: app-side controller (reference; the app currently
+  drives `NETunnelProviderManager` from `src-tauri/native/packet_tunnel.m`).
+- `VpnExtension/PacketTunnelProvider.swift`: extension-side tunnel lifecycle
+  and settings.
 - `VpnExtension/Info.plist`: extension plist.
 - `App.entitlements`: host app entitlements.
 - `VpnExtension/SocksTunnelExtension.entitlements`: extension entitlements.
 
-## Required Xcode Wiring
+## Required Apple configuration
 
-The files here are not compiled by Cargo or Vite. They must be added to an
-Xcode target:
+1. App ID + extension App ID, both with the NetworkExtension capability enabled.
+2. A provisioning profile that authorises `packet-tunnel-provider`.
+3. Host app and extension must share the App Group `group.com.tosone.socks`.
+4. Embed the built `.appex` under `Contents/PlugIns/` (handled by
+   `make extension-embed`).
 
-1. Add a macOS App Extension target of type Packet Tunnel Provider.
-2. Set the extension bundle identifier to `com.tosone.socks.SocksTunnelExtension`.
-3. Add `VpnExtension/PacketTunnelProvider.swift` to that extension target.
-4. Use `VpnExtension/Info.plist` for the extension.
-5. Apply `VpnExtension/SocksTunnelExtension.entitlements` to the extension.
-6. Apply `App.entitlements` to the Tauri host app signing step.
-7. Embed the built `.appex` in the final `.app` bundle under `Contents/PlugIns/`.
-8. Ensure the host app and extension use the same App Group.
-
-## Data Plane Gap
+## Data plane gap
 
 The packet data plane is intentionally not stubbed as successful. The extension
 must connect `NEPacketTunnelFlow` to a Shadowsocks transport before it can
 replace the helper at runtime.
 
-The viable implementation options are:
+The plan (see `todo.md` M2/M3) is to compile a Rust core statically into the
+extension and bridge packets over a C ABI:
 
-- Adapt `shadowsocks-rust` behind a packet source/sink abstraction callable from
-  Swift.
-- Reuse Outline's Go tun2socks stack and gobind-generated framework.
-- Introduce a narrow Swift/Rust bridge that batches packet reads and writes.
-
-Do not switch `src-tauri/src/session.rs` to this backend until the extension
-can actually relay packets. Otherwise the UI Connect action will only create a
-VPN configuration that immediately fails.
+- Reuse `shadowsocks-service`'s `local-tun` (`TcpTun` / `UdpTun` / `smoltcp`).
+- Replace the real `utun` device with a virtual device backed by
+  `NEPacketTunnelFlow`.
+- Batch packets across the FFI boundary.

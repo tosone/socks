@@ -1,13 +1,28 @@
 import Foundation
 import NetworkExtension
 
+/// Packet Tunnel Provider backed by the Rust `socks-core` data plane.
+///
+/// The extension owns `NEPacketTunnelFlow`; the Rust core owns the userspace
+/// TCP/IP + Shadowsocks stack. Packets cross the boundary over the C ABI in
+/// `socks_core.h`.
 final class PacketTunnelProvider: NEPacketTunnelProvider {
   private enum ConfigKey {
     static let tunnelId = "id"
     static let transport = "transport"
+    /// Optional `[String]` of DNS server addresses to advertise to the system.
+    static let dnsServers = "dnsServers"
   }
 
-  private var relay: PacketRelay?
+  /// DNS servers advertised to the system.
+  ///
+  /// They must be reachable *through* the tunnel and get resolved by the
+  /// Shadowsocks server. We deliberately do NOT use a fake link-local address:
+  /// `169.254.0.0/16` is in `excludedSubnets`, so queries to such an address
+  /// bypass the tunnel and time out (verified on device).
+  private static let defaultDnsServers = ["1.1.1.1", "8.8.8.8"]
+
+  private var relay: RustRelay?
   private var observingDefaultPath = false
 
   override func startTunnel(
@@ -24,15 +39,18 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
       completionHandler(TunnelProviderError.invalidConfiguration("Missing tunnel id."))
       return
     }
-    guard let transportConfig = protocolConfig.providerConfiguration?[ConfigKey.transport] as? String,
-      !transportConfig.isEmpty
+    guard let configJSON = protocolConfig.providerConfiguration?[ConfigKey.transport] as? String,
+      !configJSON.isEmpty
     else {
-      completionHandler(TunnelProviderError.invalidConfiguration("Missing transport config."))
+      completionHandler(TunnelProviderError.invalidConfiguration("Missing client config."))
       return
     }
 
-    let settings = Self.networkSettings()
-    setTunnelNetworkSettings(settings) { [weak self] error in
+    let dnsServers = (protocolConfig.providerConfiguration?[ConfigKey.dnsServers] as? [String])?
+      .filter { !$0.isEmpty } ?? Self.defaultDnsServers
+
+    let network = Self.makeNetwork(dnsServers: dnsServers)
+    setTunnelNetworkSettings(network.settings) { [weak self] error in
       if let error {
         completionHandler(error)
         return
@@ -42,11 +60,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         return
       }
       do {
-        self.relay = try Self.makeRelay(
-          tunnelId: tunnelId,
-          transportConfig: transportConfig,
+        let relay = RustRelay(
+          configJSON: configJSON,
+          tunnelAddress: network.address,
+          subnetMask: network.subnetMask,
           packetFlow: self.packetFlow
         )
+        try relay.start()
+        self.relay = relay
         self.addObserver(self, forKeyPath: "defaultPath", options: [.old], context: nil)
         self.observingDefaultPath = true
         completionHandler(nil)
@@ -84,25 +105,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
   }
 
-  private static func networkSettings() -> NEPacketTunnelNetworkSettings {
+  private static func makeNetwork(dnsServers: [String]) -> TunnelNetwork {
     let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "::")
     let vpnAddress = selectVpnAddress(interfaceAddresses: networkInterfaceAddresses())
-    let ipv4Settings = NEIPv4Settings(addresses: [vpnAddress], subnetMasks: ["255.255.255.0"])
+    let subnetMask = "255.255.255.0"
+    let ipv4Settings = NEIPv4Settings(addresses: [vpnAddress], subnetMasks: [subnetMask])
     ipv4Settings.includedRoutes = [NEIPv4Route.default()]
     ipv4Settings.excludedRoutes = excludedIpv4Routes()
     settings.ipv4Settings = ipv4Settings
-    settings.dnsSettings = NEDNSSettings(servers: ["169.254.113.53"])
-    return settings
-  }
-
-  private static func makeRelay(
-    tunnelId: String,
-    transportConfig: String,
-    packetFlow: NEPacketTunnelFlow
-  ) throws -> PacketRelay {
-    throw TunnelProviderError.dataPlaneUnavailable(
-      "Packet relay is not wired yet. Connect NEPacketTunnelFlow to the Shadowsocks transport before enabling this backend."
-    )
+    settings.dnsSettings = NEDNSSettings(servers: dnsServers)
+    return TunnelNetwork(address: vpnAddress, subnetMask: subnetMask, settings: settings)
   }
 
   private func removeDefaultPathObserver() {
@@ -113,12 +125,165 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
   }
 }
 
-private protocol PacketRelay {
-  func stop()
-  func notifyNetworkChanged()
+private struct TunnelNetwork {
+  let address: String
+  let subnetMask: String
+  let settings: NEPacketTunnelNetworkSettings
 }
 
-private enum TunnelProviderError: LocalizedError {
+/// Bridges `NEPacketTunnelFlow` to the Rust `socks-core` data plane.
+private final class RustRelay {
+  private let configJSON: String
+  private let tunnelAddress: String
+  private let subnetMask: String
+  private let packetFlow: NEPacketTunnelFlow
+  private var running = false
+
+  init(configJSON: String, tunnelAddress: String, subnetMask: String, packetFlow: NEPacketTunnelFlow) {
+    self.configJSON = configJSON
+    self.tunnelAddress = tunnelAddress
+    self.subnetMask = subnetMask
+    self.packetFlow = packetFlow
+  }
+
+  func start() throws {
+    let context = Unmanaged.passUnretained(self).toOpaque()
+    var errorBuffer = [CChar](repeating: 0, count: 2048)
+
+    let status = configJSON.withCString { configPointer in
+      tunnelAddress.withCString { addressPointer in
+        subnetMask.withCString { maskPointer in
+          socks_core_start(
+            configPointer,
+            addressPointer,
+            maskPointer,
+            socksCoreSend,
+            socksCoreEvent,
+            context,
+            &errorBuffer,
+            UInt(errorBuffer.count)
+          )
+        }
+      }
+    }
+
+    guard status == 0 else {
+      throw TunnelProviderError.dataPlaneUnavailable(Self.errorMessage(from: errorBuffer))
+    }
+
+    running = true
+    readPackets()
+  }
+
+  func stop() {
+    running = false
+    _ = socks_core_stop()
+  }
+
+  func notifyNetworkChanged() {
+    _ = socks_core_notify_network_changed()
+  }
+
+  /// Packets produced by the core, written back to the tunnel.
+  func handleOutbound(_ packets: UnsafePointer<SocksPacket>?, count: UInt) {
+    guard let packets, count > 0 else {
+      return
+    }
+
+    var datas = [Data]()
+    var protocols = [NSNumber]()
+    datas.reserveCapacity(Int(count))
+    protocols.reserveCapacity(Int(count))
+
+    for index in 0..<Int(count) {
+      let packet = packets[index]
+      guard let data = packet.data, packet.len > 0 else {
+        continue
+      }
+      let bytes = Data(bytes: data, count: Int(packet.len))
+      let family = bytes.first.map { $0 >> 4 == 6 ? AF_INET6 : AF_INET } ?? AF_INET
+      datas.append(bytes)
+      protocols.append(NSNumber(value: family))
+    }
+
+    guard !datas.isEmpty else {
+      return
+    }
+    packetFlow.writePackets(datas, withProtocols: protocols)
+  }
+
+  private func readPackets() {
+    guard running else {
+      return
+    }
+    packetFlow.readPackets { [weak self] packets, _ in
+      guard let self, self.running else {
+        return
+      }
+      self.push(packets)
+      self.readPackets()
+    }
+  }
+
+  /// Hands a batch of packets read from the tunnel to the core.
+  private func push(_ packets: [Data]) {
+    let total = packets.reduce(0) { $0 + $1.count }
+    guard total > 0 else {
+      return
+    }
+
+    // The core copies the packets synchronously, so a single scratch buffer is
+    // enough to keep every pointer valid for the duration of the call.
+    var scratch = [UInt8](repeating: 0, count: total)
+    var corePackets = [SocksPacket]()
+    corePackets.reserveCapacity(packets.count)
+
+    scratch.withUnsafeMutableBufferPointer { buffer in
+      guard let base = buffer.baseAddress else {
+        return
+      }
+      var offset = 0
+      for packet in packets where !packet.isEmpty {
+        packet.copyBytes(to: base + offset, count: packet.count)
+        corePackets.append(SocksPacket(data: UnsafePointer(base + offset), len: UInt(packet.count)))
+        offset += packet.count
+      }
+
+      _ = corePackets.withUnsafeBufferPointer { pointer in
+        socks_core_push(pointer.baseAddress, UInt(corePackets.count))
+      }
+    }
+  }
+
+  private static func errorMessage(from buffer: [CChar]) -> String {
+    let message = String(cString: buffer).trimmingCharacters(in: .whitespacesAndNewlines)
+    return message.isEmpty ? "Failed to start the data plane." : message
+  }
+}
+
+/// Must match `SocksSendFn` in `socks_core.h`.
+private func socksCoreSend(
+  _ packets: UnsafePointer<SocksPacket>?,
+  _ count: UInt,
+  _ context: UnsafeMutableRawPointer?
+) {
+  guard let context else {
+    return
+  }
+  let relay = Unmanaged<RustRelay>.fromOpaque(context).takeUnretainedValue()
+  relay.handleOutbound(packets, count: count)
+}
+
+/// Must match `SocksEventFn` in `socks_core.h`.
+private func socksCoreEvent(_ eventJSON: UnsafePointer<CChar>?, _ context: UnsafeMutableRawPointer?) {
+  guard let eventJSON else {
+    return
+  }
+  let message = String(cString: eventJSON)
+  NSLog("[socks-core] %@", message)
+}
+
+enum TunnelProviderError: LocalizedError {
   case invalidConfiguration(String)
   case dataPlaneUnavailable(String)
 
