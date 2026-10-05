@@ -62,6 +62,28 @@ pub const CIPHERS: &[&str] = &[
     "table",
 ];
 
+/// Ciphers offered when creating or editing a profile. The `sm4-*`,
+/// `camellia-*`, `rc4*`, `table` and AES-128/AES-192 families are still
+/// accepted by [`ProfileInput::validate`] so existing profiles keep working,
+/// but they are no longer shown in the UI.
+pub const DISPLAY_CIPHERS: &[&str] = &[
+    "2022-blake3-chacha20-poly1305",
+    "2022-blake3-aes-256-gcm",
+    "2022-blake3-aes-128-gcm",
+    "2022-blake3-chacha8-poly1305",
+    "xchacha20-ietf-poly1305",
+    "chacha20-ietf-poly1305",
+    "chacha20-ietf",
+    "aes-256-gcm",
+    "aes-256-gcm-siv",
+    "aes-256-ccm",
+    "aes-256-ctr",
+    "aes-256-cfb",
+    "aes-256-cfb1",
+    "aes-256-cfb8",
+    "aes-256-ofb",
+];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Profile {

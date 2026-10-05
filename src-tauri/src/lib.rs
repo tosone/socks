@@ -12,7 +12,7 @@ mod session;
 use std::{collections::HashMap, fs};
 
 use error::AppResult;
-use profiles::{Profile, ProfileInput, CIPHERS};
+use profiles::{Profile, ProfileInput, DISPLAY_CIPHERS};
 use proxy_installer::{InstallerRunInput, InstallerRunResult};
 use server_installer::{SshRunInput, SshRunResult};
 use session::{AppState, RuntimeStatus, TrafficTotals};
@@ -54,7 +54,7 @@ async fn delete_profile(state: tauri::State<'_, AppState>, id: String) -> AppRes
 
 #[tauri::command]
 fn list_ciphers() -> Vec<String> {
-    CIPHERS.iter().map(|s| s.to_string()).collect()
+    DISPLAY_CIPHERS.iter().map(|s| s.to_string()).collect()
 }
 
 #[tauri::command]
