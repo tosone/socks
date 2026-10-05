@@ -19,11 +19,28 @@ use crate::{
     device::{EventCallback, SendCallback, SocksEventFn, SocksPacket, SocksSendFn, VirtualDevice},
 };
 
+/// Everything needed to bring the data plane back up after a network change.
+#[derive(Clone)]
+struct StartParams {
+    config: StartConfig,
+    tunnel_address: String,
+    tunnel_netmask: String,
+    send: SocksSendFn,
+    event: SocksEventFn,
+    ctx: *mut c_void,
+}
+
+// SAFETY: `ctx` is the caller-provided opaque pointer. The FFI contract requires
+// it to stay valid until the core is stopped, which is the same guarantee
+// `SendCallback`/`EventCallback` already rely on.
+unsafe impl Send for StartParams {}
+
 /// Handle to a running data plane.
 struct Engine {
     runtime: Runtime,
     tx: mpsc::UnboundedSender<Bytes>,
     events: EventCallback,
+    params: StartParams,
 }
 
 /// Only one tunnel can run at a time, and the FFI calls are synchronous.
@@ -101,7 +118,19 @@ pub(crate) fn start(
     events.emit(&status_event("started"));
 
     let mut guard = ENGINE.lock().map_err(|_| "core state is poisoned".to_owned())?;
-    *guard = Some(Engine { runtime, tx, events });
+    *guard = Some(Engine {
+        runtime,
+        tx,
+        events,
+        params: StartParams {
+            config,
+            tunnel_address: tunnel_address.to_owned(),
+            tunnel_netmask: tunnel_netmask.to_owned(),
+            send,
+            event,
+            ctx,
+        },
+    });
     Ok(())
 }
 
@@ -154,10 +183,33 @@ pub(crate) unsafe fn push(packets: *const SocksPacket, count: usize) -> Result<(
     Ok(())
 }
 
+/// The host's default network path changed (Wi-Fi switch, sleep/wake, ...).
+///
+/// In-flight TCP/UDP state is invalid after such a switch and
+/// `shadowsocks-service` exposes no reset hook for it, so restart the whole
+/// data plane: every association and outbound socket is dropped and new
+/// connections pick up the new path. The tunnel interface itself stays up.
 pub(crate) fn notify_network_changed() -> Result<(), String> {
-    // TODO(M5): drop in-flight TCP/UDP state so the stack reconnects on the new
-    // path. shadowsocks-service has no hook for this yet.
-    Ok(())
+    let params = {
+        let guard = ENGINE.lock().map_err(|_| "core state is poisoned".to_owned())?;
+        guard
+            .as_ref()
+            .ok_or_else(|| "core is not running".to_owned())?
+            .params
+            .clone()
+    };
+
+    log::info!("default network path changed; restarting the data plane");
+    // `start` is idempotent: it stops any previous instance first.
+    let StartParams {
+        config,
+        tunnel_address,
+        tunnel_netmask,
+        send,
+        event,
+        ctx,
+    } = params;
+    start(config, &tunnel_address, &tunnel_netmask, send, event, ctx)
 }
 
 fn status_event(status: &str) -> String {

@@ -11,12 +11,12 @@ use std::{
     ptr,
     sync::{
         Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 
-use socks_core::{SocksPacket, socks_core_push, socks_core_start, socks_core_stop};
+use socks_core::{SocksPacket, socks_core_notify_network_changed, socks_core_push, socks_core_start, socks_core_stop};
 
 static OUTBOUND: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
 
@@ -106,15 +106,19 @@ fn ipv4_tcp_syn(src: Ipv4Addr, src_port: u16, dst: Ipv4Addr, dst_port: u16) -> V
 
 #[test]
 fn pushed_syn_connects_to_the_shadowsocks_server() {
-    // Fake Shadowsocks server: accept one TCP connection.
+    // Fake Shadowsocks server: count the TCP connections it receives. Two are
+    // expected: one before the simulated network change and one after.
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake server");
     let server_port = listener.local_addr().unwrap().port();
-    let accepted = std::sync::Arc::new(AtomicBool::new(false));
+    let accepted = std::sync::Arc::new(AtomicUsize::new(0));
     {
         let accepted = accepted.clone();
         std::thread::spawn(move || {
-            if listener.accept().is_ok() {
-                accepted.store(true, Ordering::SeqCst);
+            for stream in listener.incoming() {
+                if stream.is_err() {
+                    break;
+                }
+                accepted.fetch_add(1, Ordering::SeqCst);
             }
         });
     }
@@ -155,15 +159,40 @@ fn pushed_syn_connects_to_the_shadowsocks_server() {
     assert_eq!(pushed, 0, "push failed");
 
     let deadline = Instant::now() + Duration::from_secs(10);
-    while !accepted.load(Ordering::SeqCst) && Instant::now() < deadline {
+    while accepted.load(Ordering::SeqCst) < 1 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(50));
     }
 
     // The core must also have produced an outbound SYN-ACK for the tunnel.
     let saw_syn_ack = OUTBOUND.lock().unwrap().iter().any(|packet| is_tcp_syn_ack(packet));
 
-    assert!(accepted.load(Ordering::SeqCst), "the Shadowsocks server never received a connection");
+    assert!(accepted.load(Ordering::SeqCst) >= 1, "the Shadowsocks server never received a connection");
     assert!(saw_syn_ack, "the core never sent a SYN-ACK back to the tunnel");
+
+    // Simulate a default-path change: the core restarts itself, dropping every
+    // in-flight association so new connections use the new path.
+    assert_eq!(socks_core_notify_network_changed(), 0, "network-change restart failed");
+
+    let syn2 = ipv4_tcp_syn(
+        Ipv4Addr::new(10, 111, 222, 1),
+        40001,
+        Ipv4Addr::new(93, 184, 216, 34),
+        443,
+    );
+    let packet2 = SocksPacket {
+        data: syn2.as_ptr(),
+        len: syn2.len(),
+    };
+    assert_eq!(unsafe { socks_core_push(&packet2, 1) }, 0, "push after restart failed");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while accepted.load(Ordering::SeqCst) < 2 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        accepted.load(Ordering::SeqCst) >= 2,
+        "the core did not come back up after the network change"
+    );
 
     socks_core_stop();
 }

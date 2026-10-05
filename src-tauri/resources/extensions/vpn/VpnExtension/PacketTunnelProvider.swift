@@ -36,6 +36,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
   private var relay: RustRelay?
   private var observingDefaultPath = false
+  /// Settings currently advertised to the system.
+  ///
+  /// Kept so they can be re-applied when the default path changes: clearing the
+  /// settings while the path is down removes the tunnel routes and
+  /// NetworkExtension does not restore them by itself.
+  private var tunnelNetwork: TunnelNetwork?
 
   override func startTunnel(
     options: [String: NSObject]?,
@@ -77,6 +83,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         )
         try relay.start()
         self.relay = relay
+        self.tunnelNetwork = network
         self.addObserver(self, forKeyPath: "defaultPath", options: [.old], context: nil)
         self.observingDefaultPath = true
         completionHandler(nil)
@@ -105,9 +112,38 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     guard keyPath == "defaultPath" else {
       return
     }
-    if defaultPath?.status == .satisfied {
+    guard let currentPath = defaultPath else {
+      return
+    }
+
+    // macOS and iOS fire this KVO repeatedly for the same path (a known issue
+    // since iOS 11 that Outline also works around). Without this guard every
+    // duplicate event clears the tunnel settings again, which can leave the
+    // tunnel up with no routes at all. `description` carries details that
+    // structural equality misses, so compare it (as Outline does). The type is
+    // not named explicitly because two `NWPath` types are in scope here.
+    if let previous = change?[.oldKey],
+      String(describing: previous) == String(describing: currentPath)
+    {
+      return
+    }
+
+    if currentPath.status == .satisfied {
+      // Drop in-flight state and pick up the new path.
       relay?.notifyNetworkChanged()
-      reasserting = false
+
+      guard let settings = tunnelNetwork?.settings else {
+        reasserting = false
+        return
+      }
+      // Routes and DNS were cleared while the path was down; put them back,
+      // keeping the same tunnel address the core was started with.
+      setTunnelNetworkSettings(settings) { [weak self] error in
+        if let error {
+          NSLog("[socks] failed to re-apply tunnel settings: %@", error.localizedDescription)
+        }
+        self?.reasserting = false
+      }
     } else {
       reasserting = true
       setTunnelNetworkSettings(nil) { _ in }
