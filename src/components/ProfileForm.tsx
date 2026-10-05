@@ -1,9 +1,22 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, SubmitEvent } from "react";
+import { createPortal } from "react-dom";
 import { Check, ChevronDown, Eye, EyeOff } from "lucide-react";
 import type { Profile, ProfileInput } from "../types";
 
 const MAX_PROFILE_NAME_CHARS = 10;
+
+// The cipher list is portaled out of the dialog and kept to a few rows so the
+// dialog itself never starts scrolling when the list opens.
+const CIPHER_PANEL_ROWS = 4;
+const CIPHER_PANEL_ROW_HEIGHT = 36; // h-9 on each option
+const CIPHER_PANEL_PADDING = 8; // p-1 top + bottom
+const CIPHER_PANEL_BORDER = 2; // 1px top + bottom
+const CIPHER_PANEL_GAP = 4;
+const CIPHER_PANEL_MAX_HEIGHT =
+  CIPHER_PANEL_ROWS * CIPHER_PANEL_ROW_HEIGHT +
+  CIPHER_PANEL_PADDING +
+  CIPHER_PANEL_BORDER;
 
 type ProfileFormProps = {
   title: string;
@@ -180,21 +193,76 @@ function CipherSelect({
   onChange: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [placement, setPlacement] = useState<{
+    left: number;
+    width: number;
+    top: number;
+    placeAbove: boolean;
+  } | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLUListElement | null>(null);
+
+  // Anchor the portaled list to the trigger and flip it above the trigger when
+  // there is no room below, so it stays fully on screen.
+  useLayoutEffect(() => {
+    if (!open) {
+      return;
+    }
+    function update() {
+      const trigger = buttonRef.current;
+      if (!trigger) {
+        return;
+      }
+      const rect = trigger.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const placeAbove =
+        spaceBelow < CIPHER_PANEL_MAX_HEIGHT + CIPHER_PANEL_GAP + 8 &&
+        rect.top > CIPHER_PANEL_MAX_HEIGHT + CIPHER_PANEL_GAP + 8;
+      setPlacement({
+        left: rect.left,
+        width: rect.width,
+        top: placeAbove ? rect.top : rect.bottom + CIPHER_PANEL_GAP,
+        placeAbove,
+      });
+    }
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [open]);
 
   useEffect(() => {
-    function onClick(event: MouseEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) {
+    if (!open) {
+      return;
+    }
+    function onPointerDown(event: MouseEvent) {
+      const target = event.target as Node;
+      if (rootRef.current?.contains(target) || panelRef.current?.contains(target)) {
+        return;
+      }
+      setOpen(false);
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
         setOpen(false);
       }
     }
-    document.addEventListener("mousedown", onClick);
-    return () => document.removeEventListener("mousedown", onClick);
-  }, []);
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
 
   return (
     <div className="relative" ref={rootRef}>
       <button
+        ref={buttonRef}
         type="button"
         className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-left text-sm text-zinc-900 outline-none focus:border-zinc-400"
         onClick={() => setOpen((current) => !current)}
@@ -207,34 +275,48 @@ function CipherSelect({
           className={`shrink-0 text-zinc-400 transition ${open ? "rotate-180" : ""}`}
         />
       </button>
-      {open ? (
-        <ul
-          role="listbox"
-          className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-xl border border-zinc-200 bg-white p-1 shadow-lg"
-        >
-          {options.map((cipher) => {
-            const selected = cipher === value;
-            return (
-              <li key={cipher}>
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={selected}
-                  className={`flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg px-3 py-2 text-left font-mono text-[13px] ${selected ? "bg-zinc-900 text-white" : "text-zinc-800 hover:bg-zinc-100"
-                    }`}
-                  onClick={() => {
-                    onChange(cipher);
-                    setOpen(false);
-                  }}
-                >
-                  <span className="truncate">{cipher}</span>
-                  {selected ? <Check size={14} className="shrink-0" /> : null}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      ) : null}
+      {open && placement
+        ? createPortal(
+            <ul
+              ref={panelRef}
+              role="listbox"
+              className="z-[60] overflow-y-auto rounded-xl border border-zinc-200 bg-white p-1 shadow-lg"
+              style={{
+                position: "fixed",
+                left: placement.left,
+                width: placement.width,
+                top: placement.top,
+                maxHeight: CIPHER_PANEL_MAX_HEIGHT,
+                transform: placement.placeAbove
+                  ? `translateY(calc(-100% - ${CIPHER_PANEL_GAP}px))`
+                  : undefined,
+              }}
+            >
+              {options.map((cipher) => {
+                const selected = cipher === value;
+                return (
+                  <li key={cipher}>
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={selected}
+                      className={`flex h-9 w-full cursor-pointer items-center justify-between gap-2 rounded-lg px-3 text-left font-mono text-[13px] ${selected ? "bg-zinc-900 text-white" : "text-zinc-800 hover:bg-zinc-100"
+                        }`}
+                      onClick={() => {
+                        onChange(cipher);
+                        setOpen(false);
+                      }}
+                    >
+                      <span className="truncate">{cipher}</span>
+                      {selected ? <Check size={14} className="shrink-0" /> : null}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
