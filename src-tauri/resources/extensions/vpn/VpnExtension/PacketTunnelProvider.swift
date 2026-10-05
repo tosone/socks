@@ -156,8 +156,28 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     ipv4Settings.includedRoutes = [NEIPv4Route.default()]
     ipv4Settings.excludedRoutes = excludedIpv4Routes()
     settings.ipv4Settings = ipv4Settings
+    settings.ipv6Settings = makeIpv6Settings()
     settings.dnsSettings = dnsSettings
     return TunnelNetwork(address: vpnAddress, subnetMask: subnetMask, settings: settings)
+  }
+
+  /// Claim all IPv6 traffic so nothing can bypass the tunnel.
+  ///
+  /// Without this the IPv6 default route stays on the physical interface, so on
+  /// an IPv6-capable network every connection would leave unproxied while the
+  /// UI claims it is tunnelled. The core cannot relay IPv6 yet (the smoltcp
+  /// interface only holds the IPv4 tunnel address), so IPv6 currently
+  /// dead-ends and apps fall back to IPv4 through Happy Eyeballs. Leaking is
+  /// worse than breaking, and this also puts the routing in place for the
+  /// eventual IPv6 support tracked as M4.3 option A.
+  private static func makeIpv6Settings() -> NEIPv6Settings {
+    let settings = NEIPv6Settings(
+      addresses: [vpnIpv6Address],
+      networkPrefixLengths: [NSNumber(value: vpnIpv6PrefixLength)]
+    )
+    settings.includedRoutes = [NEIPv6Route.default()]
+    settings.excludedRoutes = excludedIpv6Routes()
+    return settings
   }
 
   private func removeDefaultPathObserver() {
@@ -379,6 +399,46 @@ private func excludedIpv4Routes() -> [NEIPv4Route] {
       return nil
     }
     return NEIPv4Route(destinationAddress: parsed.address, subnetMask: parsed.mask)
+  }
+}
+
+/// IPv6 address of the tunnel interface.
+///
+/// A ULA, deliberately outside `excludedIpv6Subnets` so the tunnel's own subnet
+/// stays routed (the same reasoning as the IPv4 tunnel address, which is picked
+/// from `vpnSubnetCandidates` to dodge the excluded local ranges).
+private let vpnIpv6Address = "fd00:0:0:1::1"
+private let vpnIpv6PrefixLength: UInt8 = 64
+
+/// IPv6 ranges that must stay on the physical interface.
+///
+/// Mirrors what `excludedSubnets` does for IPv4: loopback, unspecified,
+/// link-local, unique-local addresses (the IPv6 analogue of RFC 1918),
+/// multicast, documentation space and 6to4. Note that `vpnIpv6Address` itself is
+/// a ULA and therefore inside `fc00::/7`; that is fine and matches the IPv4
+/// setup, where the tunnel address also sits inside an excluded range
+/// (e.g. 169.254.19.0 in 169.254.0.0/16) and still works, because macOS keeps
+/// the interface's own subnet on the tunnel.
+private let excludedIpv6Subnets = [
+  "::/128",  // unspecified
+  "::1/128",  // loopback
+  "fe80::/10",  // link-local
+  "fc00::/7",  // unique local addresses
+  "ff00::/8",  // multicast
+  "2001:db8::/32",  // documentation
+  "2002::/16",  // 6to4
+]
+
+private func excludedIpv6Routes() -> [NEIPv6Route] {
+  excludedIpv6Subnets.compactMap { subnet in
+    let parts = subnet.split(separator: "/")
+    guard parts.count == 2, let prefix = UInt8(parts[1]) else {
+      return nil
+    }
+    return NEIPv6Route(
+      destinationAddress: String(parts[0]),
+      networkPrefixLength: NSNumber(value: prefix)
+    )
   }
 }
 
