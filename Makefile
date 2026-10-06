@@ -250,6 +250,11 @@ extension-embed:
 		exit 1; \
 	fi; \
 	cp "$$profile" "$(TAURI_APP_BUNDLE)/Contents/embedded.provisionprofile"; \
+	xattr -dr com.apple.quarantine "$(TAURI_APP_BUNDLE)" >/dev/null 2>&1 || true; \
+	/usr/libexec/PlistBuddy -c "Set :LSApplicationCategoryType $(APP_INFO_CATEGORY)" "$(TAURI_APP_BUNDLE)/Contents/Info.plist" >/dev/null 2>&1 \
+		|| /usr/libexec/PlistBuddy -c "Add :LSApplicationCategoryType string $(APP_INFO_CATEGORY)" "$(TAURI_APP_BUNDLE)/Contents/Info.plist" >/dev/null; \
+	/usr/libexec/PlistBuddy -c "Set :ITSAppUsesNonExemptEncryption false" "$(TAURI_APP_BUNDLE)/Contents/Info.plist" >/dev/null 2>&1 \
+		|| /usr/libexec/PlistBuddy -c "Add :ITSAppUsesNonExemptEncryption bool false" "$(TAURI_APP_BUNDLE)/Contents/Info.plist" >/dev/null; \
 	codesign --force --sign "$(VPN_CODE_SIGN_IDENTITY)" --options runtime $(CODESIGN_TIMESTAMP_FLAGS) \
 		--entitlements "$(VPN_APP_ENTITLEMENTS)" "$(TAURI_APP_BUNDLE)"; \
 	echo "--- signed app ---"; \

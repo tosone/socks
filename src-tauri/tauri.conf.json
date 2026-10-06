@@ -29,7 +29,8 @@
     "icon": ["icons/icon.icns"],
     "macOS": {
       "entitlements": "resources/extensions/vpn/App.entitlements",
-      "minimumSystemVersion": "13.0"
+      "minimumSystemVersion": "13.0",
+      "bundleVersion": "2"
     }
   }
 }
