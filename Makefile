@@ -86,7 +86,20 @@ NOTARY_ISSUER ?=
 CODESIGN_TIMESTAMP_FLAGS ?= --timestamp=none
 XCODE_OTHER_CODE_SIGN_FLAGS ?=
 
-.PHONY: help all frontend rust-check submodule-patch core core-build extension extension-check extension-project extension-build extension-embed tauri package dmg dmg-universal release-universal-dmg clean-extension clean-core clean-dmg
+# --- Mac App Store -----------------------------------------------------------
+# Used by `make app-store-pkg`. App extensions are allowed on the App Store, so
+# this signs with Apple Distribution + App Store profiles and packages a .pkg
+# with the Mac Installer Distribution identity.
+APP_STORE_IDENTITY ?= Apple Distribution
+APP_STORE_INSTALLER_IDENTITY ?= 3rd Party Mac Developer Installer
+APP_STORE_EXT_PROFILE_NAME ?= socks extension app store
+APP_STORE_APP_PROFILE_NAME ?= socks app store
+APP_STORE_PKG_DIR ?= $(ROOT_DIR)/target/app-store
+APP_STORE_PKG ?= $(APP_STORE_PKG_DIR)/socks.pkg
+# LSApplicationCategoryType written into the app's Info.plist (App Store requires it).
+APP_INFO_CATEGORY ?= public.app-category.utilities
+
+.PHONY: help all frontend rust-check submodule-patch core core-build extension extension-check extension-project extension-build extension-embed tauri package dmg dmg-universal release-universal-dmg app-store-pkg clean-extension clean-core clean-dmg
 
 help:
 	@printf "%s\n" \
@@ -103,6 +116,7 @@ help:
 		"  make dmg             Create the .dmg from the embedded+signed app (run after extension-embed)." \
 		"  make dmg-universal   Build a universal (Intel + Apple Silicon) app + dmg in one step." \
 		"  make release-universal-dmg  Universal dmg signed with a Developer ID identity, then notarized + stapled." \
+		"  make app-store-pkg   Build a Mac App Store installer (.pkg) signed with Apple Distribution + App Store profiles." \
 		"" \
 		"Variables:" \
 		"  VPN_XCODEPROJ=$(VPN_XCODEPROJ)" \
@@ -288,6 +302,24 @@ release-universal-dmg:
 	xcrun stapler staple "$$dmg"; \
 	xcrun stapler validate "$$dmg"; \
 	echo "Released $$dmg"
+
+# Build a Mac App Store ready installer: universal app signed with the Apple
+# Distribution identity and App Store profiles, packaged into a .pkg signed
+# with the Mac Installer Distribution identity.
+app-store-pkg:
+	@security find-identity -v | grep -qF "$(APP_STORE_IDENTITY)" \
+		|| { echo "No signing identity matching '$(APP_STORE_IDENTITY)'. Install an Apple Distribution certificate." >&2; exit 1; }
+	$(MAKE) dmg-universal \
+		VPN_CODE_SIGN_IDENTITY="$(APP_STORE_IDENTITY)" \
+		VPN_EXT_PROFILE_NAME="$(APP_STORE_EXT_PROFILE_NAME)" \
+		VPN_APP_PROFILE_NAME="$(APP_STORE_APP_PROFILE_NAME)" \
+		CODESIGN_TIMESTAMP_FLAGS=--timestamp \
+		XCODE_OTHER_CODE_SIGN_FLAGS=--timestamp
+	@mkdir -p "$(APP_STORE_PKG_DIR)"
+	@rm -f "$(APP_STORE_PKG)"
+	productbuild --component "$(TAURI_UNIVERSAL_APP_BUNDLE)" /Applications \
+		--sign "$(APP_STORE_INSTALLER_IDENTITY)" "$(APP_STORE_PKG)"
+	@echo "Built $(APP_STORE_PKG)"
 
 # Must run AFTER extension-embed; see the DMG block above.
 dmg:
