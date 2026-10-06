@@ -63,7 +63,30 @@ DMG_VOLUME_NAME ?= socks
 # Match Tauri's artifact naming (arm64 -> aarch64).
 DMG_ARCH ?= $(if $(filter arm64,$(MACOS_ARCH)),aarch64,$(MACOS_ARCH))
 
-.PHONY: help all frontend rust-check submodule-patch core core-build extension extension-check extension-project extension-build extension-embed tauri package dmg dmg-universal clean-extension clean-core clean-dmg
+# --- Release (Developer ID signing + notarization) ---------------------------
+# Used by `make release-universal-dmg`. `codesign` and `xcodebuild` both accept
+# the short certificate type; override with a full identity if you have more
+# than one Developer ID Application certificate.
+DEVELOPER_ID_IDENTITY ?= Developer ID Application
+# Developer ID provisioning profiles. Required because the extension uses the
+# restricted NetworkExtension entitlement; development profiles will not work.
+RELEASE_EXT_PROFILE_NAME ?= socks extension developer id
+RELEASE_APP_PROFILE_NAME ?= socks developer id
+# Notarization credentials. Prefer exporting these in the environment so they
+# do not end up in the command line:
+#   app-specific password: NOTARY_APPLE_ID + NOTARY_PASSWORD
+#   API key:               NOTARY_KEY (path to .p8) + NOTARY_KEY_ID + NOTARY_ISSUER
+NOTARY_TEAM_ID ?= $(VPN_DEVELOPMENT_TEAM)
+NOTARY_APPLE_ID ?=
+NOTARY_PASSWORD ?=
+NOTARY_KEY ?=
+NOTARY_KEY_ID ?=
+NOTARY_ISSUER ?=
+# Notarization requires a secure timestamp; dev builds keep it fast.
+CODESIGN_TIMESTAMP_FLAGS ?= --timestamp=none
+XCODE_OTHER_CODE_SIGN_FLAGS ?=
+
+.PHONY: help all frontend rust-check submodule-patch core core-build extension extension-check extension-project extension-build extension-embed tauri package dmg dmg-universal release-universal-dmg clean-extension clean-core clean-dmg
 
 help:
 	@printf "%s\n" \
@@ -79,6 +102,7 @@ help:
 		"  make extension-embed Embed built .appex into TAURI_APP_BUNDLE=.../socks.app." \
 		"  make dmg             Create the .dmg from the embedded+signed app (run after extension-embed)." \
 		"  make dmg-universal   Build a universal (Intel + Apple Silicon) app + dmg in one step." \
+		"  make release-universal-dmg  Universal dmg signed with a Developer ID identity, then notarized + stapled." \
 		"" \
 		"Variables:" \
 		"  VPN_XCODEPROJ=$(VPN_XCODEPROJ)" \
@@ -90,6 +114,9 @@ help:
 		"  MACOS_TARGET=$(MACOS_TARGET)" \
 		"  TAURI_APP_BUNDLE=$(TAURI_APP_BUNDLE)" \
 		"  TAURI_UNIVERSAL_APP_BUNDLE=$(TAURI_UNIVERSAL_APP_BUNDLE)" \
+		"  DEVELOPER_ID_IDENTITY=$(DEVELOPER_ID_IDENTITY)" \
+		"  RELEASE_EXT_PROFILE_NAME=$(RELEASE_EXT_PROFILE_NAME)" \
+		"  RELEASE_APP_PROFILE_NAME=$(RELEASE_APP_PROFILE_NAME)" \
 		"" \
 		"Signing (already wired up as defaults; make tauri needs no extra flags):" \
 		"  VPN_DEVELOPMENT_TEAM=$(VPN_DEVELOPMENT_TEAM)" \
@@ -177,6 +204,7 @@ extension-build: extension-project core-build
 		DEVELOPMENT_TEAM="$(VPN_DEVELOPMENT_TEAM)" \
 		CODE_SIGN_IDENTITY="$(VPN_CODE_SIGN_IDENTITY)" \
 		PROVISIONING_PROFILE_SPECIFIER="$(VPN_EXT_PROFILE_NAME)" \
+		OTHER_CODE_SIGN_FLAGS="$(XCODE_OTHER_CODE_SIGN_FLAGS)" \
 		build
 	rm -rf "$(VPN_EXTENSION_OUT_DIR)/$(VPN_PRODUCT_NAME).appex"
 	mkdir -p "$(VPN_EXTENSION_OUT_DIR)"
@@ -208,7 +236,7 @@ extension-embed:
 		exit 1; \
 	fi; \
 	cp "$$profile" "$(TAURI_APP_BUNDLE)/Contents/embedded.provisionprofile"; \
-	codesign --force --sign "$(VPN_CODE_SIGN_IDENTITY)" --options runtime --timestamp=none \
+	codesign --force --sign "$(VPN_CODE_SIGN_IDENTITY)" --options runtime $(CODESIGN_TIMESTAMP_FLAGS) \
 		--entitlements "$(VPN_APP_ENTITLEMENTS)" "$(TAURI_APP_BUNDLE)"; \
 	echo "--- signed app ---"; \
 	codesign -dvvv "$(TAURI_APP_BUNDLE)" 2>&1 | grep -E "Identifier|Authority|TeamIdentifier|Signature" || true; \
@@ -231,6 +259,35 @@ dmg-universal: extension
 		|| { echo "Missing universal app bundle: $(TAURI_UNIVERSAL_APP_BUNDLE)" >&2; exit 1; }
 	$(MAKE) extension-embed TAURI_APP_BUNDLE="$(TAURI_UNIVERSAL_APP_BUNDLE)"
 	$(MAKE) dmg TAURI_APP_BUNDLE="$(TAURI_UNIVERSAL_APP_BUNDLE)" DMG_ARCH=universal
+
+# Distributable build: universal app signed with a Developer ID identity, the
+# signed extension embedded, a signed dmg, then notarized + stapled.
+release-universal-dmg:
+	@security find-identity -v -p codesigning | grep -qF "$(DEVELOPER_ID_IDENTITY)" \
+		|| { echo "No signing identity matching '$(DEVELOPER_ID_IDENTITY)'. Install a Developer ID Application certificate." >&2; exit 1; }
+	$(MAKE) dmg-universal \
+		VPN_CODE_SIGN_IDENTITY="$(DEVELOPER_ID_IDENTITY)" \
+		VPN_EXT_PROFILE_NAME="$(RELEASE_EXT_PROFILE_NAME)" \
+		VPN_APP_PROFILE_NAME="$(RELEASE_APP_PROFILE_NAME)" \
+		CODESIGN_TIMESTAMP_FLAGS=--timestamp \
+		XCODE_OTHER_CODE_SIGN_FLAGS=--timestamp
+	@set -e; \
+	ver="$$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$(TAURI_UNIVERSAL_APP_BUNDLE)/Contents/Info.plist" 2>/dev/null || echo 0.1.0)"; \
+	dmg="$(DMG_OUT_DIR)/socks_$${ver}_universal.dmg"; \
+	test -f "$$dmg" || { echo "Missing dmg: $$dmg" >&2; exit 1; }; \
+	echo "Signing $$dmg"; \
+	codesign --force --timestamp --sign "$(DEVELOPER_ID_IDENTITY)" "$$dmg"; \
+	echo "Notarizing $$dmg (this can take a few minutes)"; \
+	if [[ -n "$(NOTARY_KEY)" ]]; then \
+		xcrun notarytool submit "$$dmg" --key "$(NOTARY_KEY)" --key-id "$(NOTARY_KEY_ID)" --issuer "$(NOTARY_ISSUER)" --wait; \
+	elif [[ -n "$(NOTARY_APPLE_ID)" && -n "$(NOTARY_PASSWORD)" ]]; then \
+		xcrun notarytool submit "$$dmg" --apple-id "$(NOTARY_APPLE_ID)" --team-id "$(NOTARY_TEAM_ID)" --password "$(NOTARY_PASSWORD)" --wait; \
+	else \
+		echo "ERROR: set NOTARY_KEY/NOTARY_KEY_ID/NOTARY_ISSUER or NOTARY_APPLE_ID/NOTARY_PASSWORD." >&2; exit 1; \
+	fi; \
+	xcrun stapler staple "$$dmg"; \
+	xcrun stapler validate "$$dmg"; \
+	echo "Released $$dmg"
 
 # Must run AFTER extension-embed; see the DMG block above.
 dmg:
